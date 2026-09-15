@@ -7,6 +7,8 @@
 
 把 `index.html` 下载下来双击就能用。不需要安装任何东西，不需要服务器。
 
+**在线版：https://luthetin.github.io/strata-skeleton/**（由 GitHub Pages 托管）
+
 ![界面](docs/screenshot.png)
 
 *左：编辑面板　中：三维视图（两个相互穿插的界面，交线用红带标出）　右：实时平面图*

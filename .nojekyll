@@ -1,0 +1,4 @@
+# 告诉 GitHub Pages 不要用 Jekyll 处理本站点。
+# 当前用的是 Actions 制品发布（不经过 Jekyll），这个文件是为将来切回
+# "Deploy from a branch" 时留的保险：Jekyll 会忽略下划线开头的文件，
+# 也会对某些资源做多余处理。
