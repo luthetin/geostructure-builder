@@ -1,0 +1,1592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>多层面骨架编辑器 · 构造地质学</title>
+<style>
+  :root{ --bg:#eceae4; --panel:#fff; --ink:#2c2a26; --line:#ddd6c8; --accent:#8a5a3b; --muted:#8d867a; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden}
+  body{font:13px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+  #wrap{display:flex;height:100vh;width:100vw}
+  #ui{width:330px;flex:0 0 330px;background:var(--panel);border-right:1px solid var(--line);
+      overflow-y:auto;padding:15px 14px 26px}
+  #stage{flex:1;position:relative;min-width:0}
+  #gl{width:100%;height:100%;display:block;cursor:crosshair}
+  /* 文字标注层：压在画布上但【不接收鼠标事件】，否则会挡住拖动。
+     不加白底/白边 —— 数字是嵌在等高线缺口里的，缺口本身就是干净的底。 */
+  #labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+  #labels span{position:absolute;transform:translate(-50%,-50%);
+    font:600 11px "Segoe UI","Microsoft YaHei",sans-serif;color:#33261a;
+    white-space:nowrap}
+  #side{width:266px;flex:0 0 266px;background:var(--panel);border-left:1px solid var(--line);
+        overflow-y:auto;padding:15px 14px 24px}
+  #side h1{font-size:14px;margin:0 0 2px;letter-spacing:.3px}
+  #map2d{display:block;width:238px;height:238px;border:1px solid var(--line);
+         border-radius:5px;background:#fff;margin:8px 0 10px}
+  #mapInfo{font-size:11px;color:var(--muted);line-height:1.6}
+
+  h1{font-size:15px;margin:0 0 4px;letter-spacing:.3px}
+  .hint{font-size:11.5px;color:var(--muted);margin:0 0 14px;line-height:1.6}
+  .hint b{color:var(--accent)}
+
+  fieldset{border:1px solid var(--line);border-radius:7px;padding:8px 10px 11px;margin:0 0 10px}
+  legend{font-size:11px;color:var(--accent);font-weight:700;padding:0 5px;letter-spacing:.5px}
+  .row{display:flex;align-items:center;gap:7px;margin:7px 0}
+  .row>label{flex:0 0 58px;font-size:12px;color:#5f584d}
+  .row input[type=color]{width:32px;height:22px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer;flex:0 0 auto}
+  .row input[type=range]{flex:1;min-width:0;accent-color:var(--accent)}
+  .row .ival{flex:0 0 32px;text-align:right;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  select{font:inherit;font-size:12px;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:#fff;flex:1;color:inherit}
+  .cb{display:flex;align-items:center;gap:7px;margin:6px 0;font-size:12px;color:#5f584d;cursor:pointer}
+  .cb input{accent-color:var(--accent);margin:0}
+  .btns{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .btns button{font:inherit;font-size:11.5px;padding:4px 9px;border:1px solid var(--line);
+    background:#fbf9f5;border-radius:14px;cursor:pointer;color:#5f584d}
+  .btns button:hover{border-color:var(--accent);color:var(--accent);background:#f5efe5}
+
+  .layer{border:1px solid var(--line);border-radius:6px;padding:6px 7px;margin:6px 0;background:#fcfbf8}
+  .layer.on{border-color:var(--accent);background:#faf4ea;box-shadow:inset 0 0 0 1px var(--accent)}
+  .l1{display:flex;align-items:center;gap:6px}
+  .l1 input[type=radio]{accent-color:var(--accent);margin:0;flex:0 0 auto}
+  .l1 input[type=color]{width:26px;height:20px;padding:0;border:1px solid var(--line);border-radius:4px;background:none;cursor:pointer;flex:0 0 auto}
+  .l1 input[type=text]{flex:1;min-width:0;font:inherit;font-size:11.5px;padding:2px 5px;border:1px solid var(--line);border-radius:4px}
+  .l1 input.ord{width:38px;font:inherit;font-size:11.5px;padding:2px 3px;border:1px solid var(--line);border-radius:4px;text-align:center}
+  .l1 .del{font:inherit;font-size:12px;border:0;background:none;color:#c0a08f;cursor:pointer;padding:0 2px}
+  .l1 .del:hover{color:#a33}
+  .l2{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11px;color:var(--muted)}
+  .l2 input[type=range]{flex:1;min-width:0;accent-color:var(--accent)}
+  .l2 .opv{flex:0 0 26px;text-align:right;font-variant-numeric:tabular-nums}
+  .l2 input[type=checkbox]{accent-color:var(--accent);margin:0}
+  .ordlab{font-size:10.5px;color:#a99f8f}
+  .ordhint{font-size:10px;color:#b3aa9c;letter-spacing:.5px;padding:1px 2px}
+  .ordhint.top{margin-bottom:2px}
+  .ordhint.bot{margin-top:2px}
+
+  #info{font-size:11.5px;color:#5f584d;background:#faf8f4;border:1px solid var(--line);
+        border-radius:6px;padding:7px 9px;margin-top:9px;line-height:1.7}
+  #info b{color:var(--accent)}
+  .note{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <aside id="ui">
+    <h1>多层面骨架编辑器</h1>
+    <p class="hint">
+      <b>拖动控制点</b> = 改高度　·　<b>Shift + 点</b> = 多选，再拖可一起升降<br>
+      <b>空格 + 上下拖动</b> = 整个面升降　·　<b>拖空白 / 右键拖</b> = 旋转　·　<b>滚轮</b> = 缩放
+    </p>
+
+    <fieldset>
+      <legend>地层（层面）</legend>
+      <div id="layerList"></div>
+      <div class="btns"><button id="bAddLayer">＋ 添加地层</button></div>
+      <div class="note">
+        左侧圆钮 = 选中要编辑的层面。<b>沉积次序越高 = 位置越高</b>，新加的层自动放在最上面。
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>当前层面的骨架</legend>
+      <div class="row"><label>分辨率</label>
+        <select id="cRes">
+          <option value="5">5 × 5</option>
+          <option value="7">7 × 7</option>
+          <option value="9" selected>9 × 9</option>
+          <option value="11">11 × 11</option>
+          <option value="13">13 × 13</option>
+        </select></div>
+      <div class="btns">
+        <button id="bValley">谷地</button>
+        <button id="bHills">丘陵</button>
+        <button id="bFlat">拉平</button>
+        <button id="bRand">随机</button>
+        <button id="bRelax">平滑一次</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>曲面</legend>
+      <div class="row"><label>类型</label>
+        <select id="cSurf">
+          <option value="interp" selected>插值 · 穿过控制点</option>
+          <option value="approx">逼近 · 三次 B 样条</option>
+        </select></div>
+      <label class="cb"><input type="checkbox" id="cCurv"> 按高斯曲率着色（红穹隆 / 蓝鞍部 / 灰可展）</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>显示</legend>
+      <label class="cb"><input type="checkbox" id="cWire" checked> 骨架线框（正方形 + 对角线）</label>
+      <label class="cb"><input type="checkbox" id="cFill"> 骨架面填充（低多边形）</label>
+      <label class="cb"><input type="checkbox" id="cHandles" checked> 控制点手柄</label>
+      <label class="cb"><input type="checkbox" id="cXray" checked> 骨架透视（穿透可见）</label>
+      <label class="cb"><input type="checkbox" id="cInter" checked> 层面交线</label>
+      <div class="row"><label>交线颜色</label>
+        <input type="color" id="cInterColor" value="#db291a">
+        <input type="range" id="cInterAlpha" min="0" max="1" step="0.05" value="1">
+        <span class="ival" id="cInterAlpha_v">1.00</span></div>
+      <label class="cb"><input type="checkbox" id="cRule" checked> 沉积次序透明规则</label>
+
+      <label class="cb" style="margin-top:9px"><input type="checkbox" id="cContour" checked> 最高次序地层等高线</label>
+      <label class="cb"><input type="checkbox" id="cContourLabel" checked> 等高线标注高程数字</label>
+      <div class="row"><label>等高距</label>
+        <input type="range" id="cContourInt" min="20" max="400" step="10" value="100">
+        <span class="ival" id="cContourInt_v">100 m</span></div>
+      <div class="row"><label>等高线色</label>
+        <input type="color" id="cContourColor" value="#5a3d21">
+        <input type="range" id="cContourAlpha" min="0" max="1" step="0.05" value="0.9">
+        <span class="ival" id="cContourAlpha_v">0.90</span></div>
+      <div class="note" style="margin-top:4px">
+        等高线画在<b>沉积次序最高</b>的那个层面上，是层面自身的等值线（构造等高线 / 走向线），
+        每点高程都等于标注高度。改等高距需要重算几何，改颜色不需要。
+      </div>
+      <div class="note" style="margin-top:4px">
+        规则：某处若有<b>次序更高</b>的层面压在下面，则该处<b>次序较低的层面变透明</b>，交线照常显示。<br>
+        层面与交线都参与<b>深度遮挡</b>：前面的挡住后面的。
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>保存成果</legend>
+      <div class="btns">
+        <button id="bSave">保存到文件</button>
+        <button id="bOpen">打开文件</button>
+        <button id="bPng">导出图片</button>
+      </div>
+      <input type="file" id="fileIn" accept=".json,application/json" style="display:none">
+      <div class="note">
+        保存为 <b>.json</b>，含每个层面的骨架高程、水平偏移、颜色、透明度、沉积次序与视角，
+        关掉浏览器也不会丢。导出图片会按当前画布分辨率出 PNG。
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>编辑手感</legend>
+      <div class="row"><label>拖动灵敏度</label>
+        <input type="range" id="cDragSens" min="0.05" max="1.5" step="0.05" value="0.3">
+        <span class="ival" id="cDragSens_v">0.30</span></div>
+      <div class="note" id="sensNote"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>视角</legend>
+      <div class="btns"><button id="bReset">重置视角</button><button id="bSpin">自动旋转</button></div>
+    </fieldset>
+
+    <div id="info"></div>
+  </aside>
+  <div id="stage">
+    <canvas id="gl"></canvas>
+    <div id="labels"></div>
+  </div>
+
+  <aside id="side">
+    <h1>平面图</h1>
+    <div id="mapInfo"></div>
+    <canvas id="map2d"></canvas>
+    <label class="cb"><input type="checkbox" id="cMapContour" checked> 显示等高线</label>
+    <label class="cb"><input type="checkbox" id="cMapInter" checked> 显示交线</label>
+    <label class="cb"><input type="radio" name="mapMode" value="color" checked> 彩色（颜色表示高度）</label>
+    <label class="cb"><input type="radio" name="mapMode" value="gray"> 黑白</label>
+    <label class="cb"><input type="radio" name="mapMode" value="user"> 用层面自身颜色</label>
+    <div class="note">
+      北在上。画的是<b>沉积次序最高</b>的那个可见层面，随编辑实时更新。<br>
+      等高距用的是左侧「最高次序地层等高线」那一栏的设定。
+    </div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   多层面骨架编辑器
+   ------------------------------------------------------------
+   每个地层面 = 一张骨架面（整数格控制点 → 正方形 + 一条对角线
+   → 两个三角形），拖控制点改形态；再用张量积三次样条把骨架
+   求成光滑曲面。所有层面共用同一套平面网格，所以"同一 (x,y)
+   处各层面的高度"可以直接按网格下标比较。
+
+   沉积次序透明规则：
+     层面 i 在 (x,y) 处透明  ⟺  存在次序更高的层面 j 使 z_j < z_i
+   即"年轻的压在老的下面"这种反常部位，让上方那个老层面让路，
+   露出下面的新层面；交线另行画出、照常显示。
+   ============================================================ */
+
+const SPACING = 500;      // 控制点格距（米）
+const NS = 96;            // 光滑曲面细分数
+const SZ = (NS + 1) * (NS + 1);
+const D2R = Math.PI / 180;
+
+const S = {
+  res: 9, layers: [], active: 0, surf: 'interp',
+  showWire: true, showFill: false, showHandles: true, xray: true,
+  inter: true, orderRule: true, curv: false, autoRotate: false,
+  interColor: [0.86, 0.16, 0.10], interAlpha: 1,
+  showContour: true, contourInt: 100, contourLabel: true,
+  contourColor: [0.353, 0.239, 0.129], contourAlpha: 0.9,
+  mapMode: 'color', mapContour: true, mapInter: true,
+  dragSens: 0.3,
+};
+const mapL = () => (S.res - 1) * SPACING;
+const mat  = () => S.surf === 'interp' ? MAT_CR : MAT_BS;
+
+/* ============================================================
+   三次基函数（已验证：Catmull-Rom 严格穿过控制点，
+   抛物面高斯曲率与解析值 c² 相对误差 0.000%）
+   ============================================================ */
+const MAT_CR = [[-0.5,1.5,-1.5,0.5],[1.0,-2.5,2.0,-0.5],[-0.5,0,0.5,0],[0,1,0,0]];
+const MAT_BS = [[-1/6,3/6,-3/6,1/6],[3/6,-6/6,3/6,0],[-3/6,0,3/6,0],[1/6,4/6,1/6,0]];
+function basis(t, M, order) {
+  const c = order === 0 ? [t*t*t, t*t, t, 1]
+          : order === 1 ? [3*t*t, 2*t, 1, 0]
+          :               [6*t, 2, 0, 0];
+  const w = [0,0,0,0];
+  for (let a = 0; a < 4; a++) for (let r = 0; r < 4; r++) w[a] += c[r] * M[r][a];
+  return w;
+}
+const _cl = (v, lo, hi) => v < lo ? lo : (v > hi ? hi : v);
+
+/* 在 (x,y) 处求层面 L 的高程、法线与高斯曲率 */
+function evalSurf(L, x, y, M) {
+  const N = S.res, Lm = mapL(), k = (N - 1) / Lm;
+  const u = _cl(x * k, 0, N - 1 - 1e-9), v = _cl(y * k, 0, N - 1 - 1e-9);
+  const i = Math.floor(u), j = Math.floor(v), tu = u - i, tv = v - j;
+  const wu=basis(tu,M,0), wv=basis(tv,M,0), du=basis(tu,M,1), dv=basis(tv,M,1);
+  const eu=basis(tu,M,2), ev=basis(tv,M,2);
+  let z=0, zu=0, zv=0, zuu=0, zvv=0, zuv=0;
+  for (let b = 0; b < 4; b++) {
+    const jj = _cl(j-1+b, 0, N-1) * N, wb=wv[b], db=dv[b], eb=ev[b];
+    for (let a = 0; a < 4; a++) {
+      const P = L.z[jj + _cl(i-1+a, 0, N-1)];
+      z += wu[a]*wb*P; zu += du[a]*wb*P; zv += wu[a]*db*P;
+      zuu += eu[a]*wb*P; zvv += wu[a]*eb*P; zuv += du[a]*db*P;
+    }
+  }
+  const zx=zu*k, zy=zv*k, zxx=zuu*k*k, zyy=zvv*k*k, zxy=zuv*k*k;
+  const g = 1 + zx*zx + zy*zy, ig = 1/Math.sqrt(g);
+  return { z, nx:-zx*ig, ny:-zy*ig, nz:ig, K:(zxx*zyy - zxy*zxy)/(g*g) };
+}
+
+/* ============================================================
+   线性代数 + WebGL
+   ============================================================ */
+function perspective(fovy, aspect, near, far) {
+  const f = 1/Math.tan(fovy/2), o = new Float32Array(16);
+  o[0]=f/aspect; o[5]=f; o[10]=(far+near)/(near-far); o[11]=-1;
+  o[14]=2*far*near/(near-far); return o;
+}
+function lookAt(eye, ctr, up) {
+  const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+  const crs=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+  const nrm=v=>{const l=Math.hypot(v[0],v[1],v[2])||1;return [v[0]/l,v[1]/l,v[2]/l];};
+  const dt=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const z=nrm(sub(eye,ctr)), x=nrm(crs(up,z)), y=crs(z,x), o=new Float32Array(16);
+  o[0]=x[0];o[1]=y[0];o[2]=z[0];o[3]=0; o[4]=x[1];o[5]=y[1];o[6]=z[1];o[7]=0;
+  o[8]=x[2];o[9]=y[2];o[10]=z[2];o[11]=0;
+  o[12]=-dt(x,eye);o[13]=-dt(y,eye);o[14]=-dt(z,eye);o[15]=1; return o;
+}
+function mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c=0;c<4;c++) for (let r=0;r<4;r++)
+    o[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];
+  return o;
+}
+
+const cv = document.getElementById('gl');
+// preserveDrawingBuffer：导出 PNG 要用 toDataURL 读回画面，没有它会经常拿到空白图
+const GL_ATTR = { antialias:true, alpha:false, preserveDrawingBuffer:true };
+const gl = cv.getContext('webgl', GL_ATTR)
+        || cv.getContext('experimental-webgl', GL_ATTR);
+if (!gl) { document.body.innerHTML = '<p style="padding:40px;font:15px sans-serif">这个浏览器没有可用的 WebGL。</p>'; throw new Error('no webgl'); }
+
+/* 顶点色用 vec4：第 4 分量装"次序规则算出的逐顶点透明度"；
+   层面自身的不透明度走 uniform，这样调不透明度不必重建几何 */
+const VS_SURF = `
+attribute vec3 aPos;
+attribute vec3 aNrm;
+attribute vec4 aCol;
+attribute float aS;
+uniform mat4 uMVP;
+varying vec3 vNrm;
+varying vec4 vCol;
+varying float vS;
+void main(){ vNrm=aNrm; vCol=aCol; vS=aS; gl_Position=uMVP*vec4(aPos,1.0); }`;
+const FS_SURF = `
+precision mediump float;
+varying vec3 vNrm;
+varying vec4 vCol;
+varying float vS;
+uniform vec3 uLight;
+uniform vec3 uTint;
+uniform float uAmbient;
+uniform float uDiffuse;
+uniform float uAlpha;
+uniform float uTwoSided;
+void main(){
+  /* 沉积次序规则：aS 是"本层与更高次序层面的最小高差"这一个【连续场】。
+     在场上过零处丢弃，透明边界就精确落在两面的交线上。
+     若改用逐顶点 0/1 透明度，边界只能落在三角形顶点上，会呈网格状锯齿，
+     正好把画在那条边界上的交线啃出缺口。 */
+  if (vS < 0.0) discard;
+  float a = uAlpha * vCol.a;
+  if (a < 0.004) discard;
+  vec3 n = normalize(vNrm);
+  float d = dot(n, uLight);
+  if (uTwoSided > 0.5) d = abs(d);
+  gl_FragColor = vec4(vCol.rgb * uTint * (uAmbient + uDiffuse*max(d,0.0)), a);
+}`;
+const VS_PT = `
+attribute vec3 aPos;
+attribute vec4 aCol;
+uniform mat4 uMVP;
+uniform float uSize;
+varying vec4 vCol;
+void main(){ vCol=aCol; gl_Position=uMVP*vec4(aPos,1.0); gl_PointSize=uSize; }`;
+const FS_PT = `
+precision mediump float;
+varying vec4 vCol;
+void main(){
+  vec2 d = gl_PointCoord - vec2(0.5);
+  if (dot(d,d) > 0.25) discard;
+  gl_FragColor = vCol;
+}`;
+function mkProg(vs, fs) {
+  const c=(ty,src)=>{const s=gl.createShader(ty);gl.shaderSource(s,src);gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s;};
+  const p=gl.createProgram();
+  gl.attachShader(p,c(gl.VERTEX_SHADER,vs)); gl.attachShader(p,c(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+const progSurf = mkProg(VS_SURF, FS_SURF), progPt = mkProg(VS_PT, FS_PT);
+const US = {}; for (const n of ['uMVP','uLight','uTint','uAmbient','uDiffuse','uAlpha','uTwoSided'])
+  US[n] = gl.getUniformLocation(progSurf, n);
+const AS = { pos:gl.getAttribLocation(progSurf,'aPos'), nrm:gl.getAttribLocation(progSurf,'aNrm'),
+             col:gl.getAttribLocation(progSurf,'aCol'), s:gl.getAttribLocation(progSurf,'aS') };
+const UP = { uMVP:gl.getUniformLocation(progPt,'uMVP'), uSize:gl.getUniformLocation(progPt,'uSize') };
+const AP = { pos:gl.getAttribLocation(progPt,'aPos'), col:gl.getAttribLocation(progPt,'aCol') };
+
+gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+function mesh(pos, nrm, col, idx, sArr) {
+  const B=(d,t)=>{const b=gl.createBuffer();gl.bindBuffer(t,b);gl.bufferData(t,d,gl.STATIC_DRAW);return b;};
+  const P=new Float32Array(pos);
+  let Nn;
+  if (nrm) Nn=new Float32Array(nrm);
+  else { Nn=new Float32Array(P.length); for(let i=2;i<Nn.length;i+=3) Nn[i]=1; }
+  const nv = P.length/3;
+  const Sv = sArr ? new Float32Array(sArr) : new Float32Array(nv).fill(1e9);
+  return { pos:B(P,gl.ARRAY_BUFFER), nrm:B(Nn,gl.ARRAY_BUFFER),
+    col:B(new Float32Array(col),gl.ARRAY_BUFFER),
+    sbuf:B(Sv,gl.ARRAY_BUFFER),
+    idx: idx?B(new Uint16Array(idx),gl.ELEMENT_ARRAY_BUFFER):null,
+    n: idx?idx.length:P.length/3, _pos:P, _col:new Float32Array(col), _s:Sv };
+}
+function dispose(m) {
+  if (!m) return;
+  gl.deleteBuffer(m.pos); gl.deleteBuffer(m.nrm); gl.deleteBuffer(m.col);
+  gl.deleteBuffer(m.sbuf);
+  if (m.idx) gl.deleteBuffer(m.idx);
+}
+/* 图元模式必须显式传对：线框网格存的是两两成对的线段顶点，
+   当成三角形画就会把毫不相干的点连起来 */
+function drawGeom(m, mvp, amb, dif, alpha, two, mode, tint) {
+  if (!m) return;
+  gl.useProgram(progSurf);
+  gl.uniformMatrix4fv(US.uMVP,false,mvp);
+  gl.uniform3f(US.uLight,-0.45,0.55,0.70);
+  gl.uniform3f(US.uTint, tint?tint[0]:1, tint?tint[1]:1, tint?tint[2]:1);
+  gl.uniform1f(US.uAmbient,amb); gl.uniform1f(US.uDiffuse,dif);
+  gl.uniform1f(US.uAlpha,alpha); gl.uniform1f(US.uTwoSided,two?1:0);
+  const bind=(b,l,s)=>{gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.enableVertexAttribArray(l);
+    gl.vertexAttribPointer(l,s,gl.FLOAT,false,0,0);};
+  bind(m.pos,AS.pos,3); bind(m.nrm,AS.nrm,3); bind(m.col,AS.col,4);
+  gl.bindBuffer(gl.ARRAY_BUFFER,m.sbuf);
+  gl.enableVertexAttribArray(AS.s);
+  gl.vertexAttribPointer(AS.s,1,gl.FLOAT,false,0,0);
+  gl.__mode=mode; gl.__count=m.n;
+  if (m.idx) { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,m.idx); gl.drawElements(mode,m.n,gl.UNSIGNED_SHORT,0); }
+  else gl.drawArrays(mode,0,m.n);
+}
+const drawSurf  = (m,mvp,amb,dif,a,two)=>drawGeom(m,mvp,amb,dif,a,two,gl.TRIANGLES);
+const drawLines = (m,mvp)=>drawGeom(m,mvp,1.0,0.0,1.0,false,gl.LINES);
+function drawPts(m, mvp, size) {
+  if (!m) return;
+  gl.useProgram(progPt);
+  gl.uniformMatrix4fv(UP.uMVP,false,mvp); gl.uniform1f(UP.uSize,size);
+  gl.bindBuffer(gl.ARRAY_BUFFER,m.pos); gl.enableVertexAttribArray(AP.pos);
+  gl.vertexAttribPointer(AP.pos,3,gl.FLOAT,false,0,0);
+  gl.bindBuffer(gl.ARRAY_BUFFER,m.col); gl.enableVertexAttribArray(AP.col);
+  gl.vertexAttribPointer(AP.col,4,gl.FLOAT,false,0,0);
+  gl.__mode=gl.POINTS; gl.__count=m.n;
+  gl.drawArrays(gl.POINTS,0,m.n);
+}
+
+/* ============================================================
+   地层数据
+   ============================================================ */
+const lerp3 = (a,b,t) => [0,1,2].map(i => a[i] + (b[i]-a[i])*t);
+function mkLayer(name, order, rgb, alpha) {
+  return { name, order, color: rgb, alpha, vis: true,
+           z:null, Z:null, NX:null, NY:null, NZ:null, K:null, S:null };
+}
+function addLayer(placeAbove) {
+  const N = S.res;
+  const L = mkLayer('层面 ' + (S.layers.length + 1),
+    S.layers.reduce((m,x) => Math.max(m, x.order), 0) + 1, [190,170,140], 0.5);
+  L.z = new Float32Array(N*N);
+  if (placeAbove && S.layers.length) {
+    const top = S.layers.reduce((a,b) => a.order >= b.order ? a : b);
+    for (let q = 0; q < N*N; q++) L.z[q] = top.z[q] + 260;   // 次序更高 → 放在最上面
+  }
+  S.layers.push(L);
+  return L;
+}
+function seedLayer(L, kind) {
+  const N = S.res, Lm = mapL();
+  L.z = new Float32Array(N*N);
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++) {
+    const x=i*SPACING, y=j*SPACING, q=j*N+i;
+    let z = 600;
+    if (kind === 'valley')      z = 620 - 0.055*y + 0.22*Math.abs(x - Lm/2);
+    else if (kind === 'inv')    z = 1600 - (620 - 0.055*y + 0.22*Math.abs(x - Lm/2));
+    else if (kind === 'hills')  z = 600 + 160*Math.sin(x/431+1.1)*Math.cos(y/367)
+                                    + 110*Math.sin((x+y)/523+0.4) + 70*Math.cos((x*1.7-y)/389);
+    else if (kind === 'flat')   z = 600;
+    else if (kind === 'rand')   z = 600 + (Math.random()-0.5)*520;
+    L.z[q] = z;
+  }
+}
+function relaxLayer(L) {
+  const N = S.res, o = L.z.slice();
+  for (let j=1;j<N-1;j++) for (let i=1;i<N-1;i++) {
+    const q=j*N+i; L.z[q] = (o[q-N]+o[q+N]+o[q-1]+o[q+1])/4;
+  }
+}
+function resampleAll(newRes) {
+  const M = mat(), old = S.res, oldZ = old*old;
+  for (const L of S.layers) {
+    if (!L.z || L.z.length !== oldZ) continue;
+    S.res = old;                                  // 先用旧网求值
+    const z = new Float32Array(newRes*newRes);
+    for (let j=0;j<newRes;j++) for (let i=0;i<newRes;i++)
+      z[j*newRes+i] = evalSurf(L, i*SPACING, j*SPACING, M).z;
+    L.z = z;
+  }
+  S.res = newRes;
+}
+
+/* ============================================================
+   求值 → 次序规则 → 几何
+   ============================================================ */
+function evalLayer(L) {
+  const Lm = mapL(), M = mat();
+  L.Z=new Float32Array(SZ); L.NX=new Float32Array(SZ); L.NY=new Float32Array(SZ);
+  L.NZ=new Float32Array(SZ); L.K=new Float32Array(SZ);
+  for (let b=0;b<=NS;b++) for (let a=0;a<=NS;a++) {
+    const s = evalSurf(L, Lm*a/NS, Lm*b/NS, M), q = b*(NS+1)+a;
+    L.Z[q]=s.z; L.NX[q]=s.nx; L.NY[q]=s.ny; L.NZ[q]=s.nz; L.K[q]=s.K;
+  }
+}
+/* 沉积次序规则：给每个层面算一个【连续的有符号场】S。
+   S[q] = 本层与所有更高次序层面的最小高差。S < 0 表示有更高次序的层面压在下面。
+   用连续场（而不是逐顶点 0/1 透明度）才能让透明边界精确落在两面的交线上。 */
+function computeAlpha() {
+  for (const L of S.layers) {
+    if (!L.S || L.S.length !== SZ) L.S = new Float32Array(SZ);
+    L.S.fill(1e9);
+  }
+  if (!S.orderRule) return;
+  for (const L of S.layers) {
+    for (const U of S.layers) {
+      if (U === L || U.order <= L.order) continue;      // 只看次序更高的层面
+      const s = L.S, uz = U.Z, lz = L.Z;
+      for (let q = 0; q < SZ; q++) {
+        const d = uz[q] - lz[q];
+        if (d < s[q]) s[q] = d;
+      }
+    }
+  }
+}
+function buildLayerSurface(L) {
+  const Lm = mapL();
+  let kref = 1e-12;
+  if (S.curv) {
+    const av = []; for (let q=0;q<SZ;q++) av.push(Math.abs(L.K[q]));
+    av.sort((p,r)=>p-r); kref = Math.max(av[Math.floor(SZ*0.9)], 1e-12);
+  }
+  let zl=Infinity, zh=-Infinity;
+  for (let q=0;q<SZ;q++){ if(L.Z[q]<zl)zl=L.Z[q]; if(L.Z[q]>zh)zh=L.Z[q]; }
+  const span = Math.max(1, zh-zl);
+  const pos=[],nrm=[],col=[],idx=[];
+  for (let q=0;q<SZ;q++) {
+    const b=(q/(NS+1))|0, a=q%(NS+1);
+    pos.push(Lm*a/NS, Lm*b/NS, L.Z[q]);
+    nrm.push(L.NX[q], L.NY[q], L.NZ[q]);
+    let c;
+    if (S.curv) {
+      const K=L.K[q], t=Math.sign(K)*Math.sqrt(Math.min(1,Math.abs(K)/kref));
+      c = t>=0 ? lerp3([0.85,0.85,0.82],[0.78,0.30,0.18],t)
+               : lerp3([0.85,0.85,0.82],[0.20,0.42,0.72],-t);
+    } else c = L.color.map(v=>v/255);
+    col.push(c[0], c[1], c[2], 1);
+  }
+  for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
+    const p0=b*(NS+1)+a, p1=p0+1, p2=p0+NS+1, p3=p2+1;
+    idx.push(p0,p2,p1,p1,p2,p3);
+  }
+  return mesh(pos,nrm,col,idx, L.S);
+}
+function buildSkeletonOf(L) {
+  const N = S.res;
+  const P = (i,j) => [i*SPACING, j*SPACING, L.z[j*N+i]];
+  const dn = L.color.map(v => Math.round(v*0.30));
+  const wc3 = [dn[0]/255, dn[1]/255, dn[2]/255];
+
+  const wp=[]; const push=(p,q)=>{ wp.push(p[0],p[1],p[2], q[0],q[1],q[2]); };
+  for (let j=0;j<N;j++)   for (let i=0;i<N-1;i++) push(P(i,j),P(i+1,j));      // 横边
+  for (let i=0;i<N;i++)   for (let j=0;j<N-1;j++) push(P(i,j),P(i,j+1));      // 竖边
+  for (let j=0;j<N-1;j++) for (let i=0;i<N-1;i++) push(P(i,j),P(i+1,j+1));    // 每格一条对角线
+  const wcol=[]; for (let k=0;k<wp.length/3;k++) wcol.push(wc3[0],wc3[1],wc3[2],1);
+  const wire = mesh(wp, null, wcol, null);
+
+  const fp=[],fn=[],fc=[];
+  for (let j=0;j<N-1;j++) for (let i=0;i<N-1;i++) {
+    const a=P(i,j), b=P(i+1,j), c=P(i+1,j+1), d=P(i,j+1);
+    for (const tri of [[a,b,c],[a,c,d]]) {
+      const [p,q,r]=tri;
+      const u=[q[0]-p[0],q[1]-p[1],q[2]-p[2]], v=[r[0]-p[0],r[1]-p[1],r[2]-p[2]];
+      let n=[u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]];
+      const nl=Math.hypot(n[0],n[1],n[2])||1; n=n.map(x=>x/nl);
+      const cc = (i+j)%2 ? [0.80,0.84,0.90] : [0.68,0.72,0.80];
+      for (const pt of tri) { fp.push(pt[0],pt[1],pt[2]); fn.push(n[0],n[1],n[2]); fc.push(cc[0],cc[1],cc[2],1); }
+    }
+  }
+  const fill = mesh(fp,fn,fc,null);
+
+  const hp=[],hc=[];
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++) {
+    const p=P(i,j); hp.push(p[0],p[1],p[2]); hc.push(0.18,0.18,0.22,1);
+  }
+  const handles = mesh(hp,null,hc,null);
+  /* 被 Shift 选中的控制点：画大一圈的红点 */
+  const sp=[], sc=[];
+  for (const k of selSet) {
+    if (k < 0 || k >= N*N) continue;
+    const p = P(k % N, (k/N)|0);
+    sp.push(p[0],p[1],p[2]); sc.push(0.88,0.16,0.10,1);
+  }
+  const sel = sp.length ? mesh(sp, null, sc, null) : null;
+  return { wire, fill, handles, sel };
+}
+
+/* ---------- 等值线：把 marching squares 的线段【缝成折线】 ----------
+   缝线是消掉锯齿的关键。每条网格边有唯一编号，相邻单元共用同一条边，
+   交点因此天然共用、折线连续；再沿折线生成连续窄带，垂直方向就不再逐段突变。
+   如果每个单元各做一条独立小带，边缘会出现"网格频率"的锯齿。 */
+function stitchContours(F) {
+  const n = NS+1, s = mapL()/NS, NN = n*n;
+  const pts = new Map(), links = new Map();
+  const eH = (i,j) => j*n + i;          // 水平边 (i,j)-(i+1,j)
+  const eV = (i,j) => NN + j*n + i;     // 垂直边 (i,j)-(i,j+1)
+  const link = (a,b) => {
+    if (!links.has(a)) links.set(a, []);
+    if (!links.has(b)) links.set(b, []);
+    links.get(a).push(b); links.get(b).push(a);
+  };
+  for (let j=0;j<n-1;j++) for (let i=0;i<n-1;i++) {
+    const ia=j*n+i, ib=ia+1, id=(j+1)*n+i, ic=id+1;
+    const va=F[ia], vb=F[ib], vc=F[ic], vd=F[id];
+    let m=0; if(va>0)m|=1; if(vb>0)m|=2; if(vc>0)m|=4; if(vd>0)m|=8;
+    if (m===0||m===15) continue;
+    const t0=(-va)/(vb-va), t1=(-vb)/(vc-vb), t2=(-vc)/(vd-vc), t3=(-vd)/(va-vd);
+    const eid = [eH(i,j), eV(i+1,j), eH(i,j+1), eV(i,j)];
+    const px  = [ (i+t0)*s, (i+1)*s, (i+1-t2)*s, i*s ];
+    const py  = [ j*s, (j+t1)*s, (j+1)*s, (j+1-t3)*s ];
+    for (let k=0;k<4;k++) if (!pts.has(eid[k])) pts.set(eid[k], [px[k], py[k]]);
+    const seg = (p,q) => link(eid[p], eid[q]);
+    switch (m) {
+      case 1: case 14: seg(3,0); break;
+      case 2: case 13: seg(0,1); break;
+      case 3: case 12: seg(3,1); break;
+      case 4: case 11: seg(1,2); break;
+      case 6: case 9:  seg(0,2); break;
+      case 7: case 8:  seg(2,3); break;
+      case 5:  seg(3,0); seg(1,2); break;
+      case 10: seg(0,1); seg(2,3); break;
+    }
+  }
+  // 沿边链走出折线。从端点（度为 1）起步，开曲线才不会从中间被截断
+  const polys = [], done = new Set();
+  const order = [...pts.keys()].sort((a,b) =>
+    (links.get(a)||[]).length - (links.get(b)||[]).length);
+  for (const st of order) {
+    if (done.has(st)) continue;
+    done.add(st);
+    const poly = [pts.get(st)];
+    let cur = st;
+    for (;;) {
+      const nb = (links.get(cur)||[]).find(x => !done.has(x));
+      if (nb === undefined) break;
+      done.add(nb);
+      poly.push(pts.get(nb));
+      cur = nb;
+    }
+    if (poly.length >= 2) polys.push(poly);
+  }
+  return polys;
+}
+/* 让线段数组长成折线所需的形式，供标注位置挑选复用 */
+function polysToSegs(polys) {
+  const out = [];
+  for (const P of polys) for (let i=0;i<P.length-1;i++)
+    out.push([P[i][0],P[i][1],0, P[i+1][0],P[i+1][1],0]);
+  return out;
+}
+/* 折线轻度平滑：抹掉网格频率的抖动（锯齿主要来源） */
+function smoothPoly(P, passes) {
+  if (P.length < 3) return P.map(p => [p[0], p[1]]);
+  let Q = P.map(p => [p[0], p[1]]);
+  for (let k=0;k<passes;k++) {
+    const R = Q.map(p => [p[0], p[1]]);
+    for (let i=1;i<Q.length-1;i++) {
+      R[i][0] = 0.25*Q[i-1][0] + 0.5*Q[i][0] + 0.25*Q[i+1][0];
+      R[i][1] = 0.25*Q[i-1][1] + 0.5*Q[i][1] + 0.25*Q[i+1][1];
+    }
+    Q = R;
+  }
+  return Q;
+}
+/* 等分插点：窄带更贴曲面 */
+function densifyPoly(P, k) {
+  if (k <= 1 || P.length < 2) return P;
+  const out = [];
+  for (let i=0;i<P.length-1;i++)
+    for (let t=0;t<k;t++) out.push([
+      P[i][0] + (P[i+1][0]-P[i][0])*t/k,
+      P[i][1] + (P[i+1][1]-P[i][1])*t/k ]);
+  out.push([P[P.length-1][0], P[P.length-1][1]]);
+  return out;
+}
+
+const HW = 8, CW = 6, LIFT = 2.5;
+/* 与渲染网格【完全一致】地取层面高程：同一个四边形、同一条对角线切分。
+   窄带只有贴着真实三角面才不会沉到面下被深度测试切掉。 */
+function sampleSurface(Z, x, y) {
+  const gs = mapL()/NS, n = NS+1;
+  const fx = _cl(x/gs, 0, NS-1-1e-9), fy = _cl(y/gs, 0, NS-1-1e-9);
+  const i = Math.floor(fx), j = Math.floor(fy), tx = fx-i, ty = fy-j;
+  const z0 = Z[j*n+i],     z1 = Z[j*n+i+1];
+  const z2 = Z[(j+1)*n+i], z3 = Z[(j+1)*n+i+1];
+  // 渲染时四边形按 (p0,p2,p1) 与 (p1,p2,p3) 切开，即 tx+ty=1 为对角
+  return (tx + ty <= 1)
+    ? z0 + (z1-z0)*tx + (z2-z0)*ty
+    : (z1+z2-z3) + (z3-z2)*tx + (z3-z1)*ty;
+}
+/* 沿折线生成【连续】窄带。每个顶点的垂直方向由前后邻点的切线决定，
+   相邻四边形共用同一顶点方向 → 边缘连续，不会有逐段突变的锯齿。
+   ZA/ZB：参与的两张层面，每点取 max 再抬高，免得被任一张面穿透切掉。
+   gapTest(x,y) 为真处不画（留给等高线的数字）。 */
+function emitRibbon(polys, NXg, NYg, NZg, hw, ZA, ZB, gapTest, pos, nrm, col) {
+  const gs = mapL()/NS, n = NS+1;
+  for (const P0 of polys) {
+    const P = densifyPoly(smoothPoly(P0, 2), 2);
+    const m = P.length; if (m < 2) continue;
+    const px = new Float64Array(m), py = new Float64Array(m), gq = new Int32Array(m);
+    for (let i=0;i<m;i++) {
+      const a = P[Math.max(0,i-1)], b = P[Math.min(m-1,i+1)];
+      let tx = b[0]-a[0], ty = b[1]-a[1];
+      const tl = Math.hypot(tx,ty) || 1; tx/=tl; ty/=tl;
+      const q = _cl(Math.round(P[i][1]/gs),0,NS)*n + _cl(Math.round(P[i][0]/gs),0,NS);
+      gq[i] = q;
+      const nx=NXg[q], ny=NYg[q], nz=NZg[q];
+      let ex = ty*nz, ey = -tx*nz;             // (tx,ty,0) × 法线的水平分量
+      const el = Math.hypot(ex,ey) || 1;
+      px[i] = ex/el*hw; py[i] = ey/el*hw;
+    }
+    const vert = (x, y, i, s) => {
+      const vx = x + s*px[i], vy = y + s*py[i];
+      let z = sampleSurface(ZA, vx, vy);
+      if (ZB) z = Math.max(z, sampleSurface(ZB, vx, vy));
+      return [vx, vy, z + LIFT];
+    };
+    for (let i=0;i<m-1;i++) {
+      const x1=P[i][0], y1=P[i][1], x2=P[i+1][0], y2=P[i+1][1];
+      if (gapTest && gapTest((x1+x2)/2, (y1+y2)/2)) continue;
+      const A1=vert(x1,y1,i, 1), A2=vert(x1,y1,i,-1);
+      const B1=vert(x2,y2,i+1, 1), B2=vert(x2,y2,i+1,-1);
+      pos.push(...A1,...A2,...B2, ...A1,...B2,...B1);
+      const q = gq[i];
+      for (let t=0;t<6;t++){ nrm.push(NXg[q],NYg[q],NZg[q]); col.push(1,1,1,1); }
+    }
+  }
+}
+
+function buildIntersections() {
+  const out = [];
+  const vis = S.layers.filter(L => L.vis);
+  const F = new Float32Array(SZ);
+  for (let i=0;i<vis.length;i++) for (let j=i+1;j<vis.length;j++) {
+    const A = vis[i], B = vis[j];
+    for (let q=0;q<SZ;q++) F[q] = A.Z[q] - B.Z[q];
+    const polys = stitchContours(F);
+    if (!polys.length) continue;
+    const pos=[], nrm=[], col=[];
+    emitRibbon(polys, A.NX, A.NY, A.NZ, HW, A.Z, B.Z, null, pos, nrm, col);
+    if (pos.length) out.push(mesh(pos,nrm,col,null));
+  }
+  return out;
+}
+
+/* 沉积次序最高的（可见）层面 */
+function topLayer() {
+  let best = null;
+  for (const L of S.layers) if (L.vis && (!best || L.order > best.order)) best = L;
+  return best;
+}
+/* 最高次序层面上的等高线（构造等高线） */
+let contourInfo = { name:'', interval:0, levels:0, segs:0, cut:0,
+                    cutLevels:0, labelLevels:0 };
+let contourAnchors = [];            // [{v,x,y,dx,dy,dz}] 等高线上的标注锚点（方向为单位向量）
+
+/* 挑标注位置：候选点很多，用"贪心 + 最小间距"筛，
+   保证数字之间不挤在一起；各条等高线轮转取候选，分布更均匀。 */
+function pickLabels(perLevel, minSep, maxN) {
+  const queues = perLevel.map(o => {
+    const step = Math.max(1, Math.round(o.segs.length / 20));
+    const q = [];
+    for (let k = 0; k < o.segs.length; k += step) {
+      const sg = o.segs[k];
+      let dx = sg[3]-sg[0], dy = sg[4]-sg[1], dz = sg[5]-sg[2];
+      const l = Math.hypot(dx, dy, dz) || 1;
+      q.push({ v: o.v, x: (sg[0]+sg[3])/2, y: (sg[1]+sg[4])/2,
+               dx: dx/l, dy: dy/l, dz: dz/l });
+    }
+    return q;
+  });
+  const out = [];
+  let grew = true;
+  while (grew && out.length < maxN) {
+    grew = false;
+    for (const q of queues) {
+      if (!q.length) continue;
+      grew = true;
+      const c = q.shift();
+      let ok = true;
+      for (const o of out)
+        if (Math.hypot(c.x-o.x, c.y-o.y) < minSep) { ok = false; break; }
+      if (ok) { out.push(c); if (out.length >= maxN) break; }
+    }
+  }
+  return out;
+}
+
+function buildContours() {
+  contourInfo = { name:'', interval:0, levels:0, segs:0, cut:0,
+                  cutLevels:0, labelLevels:0 };
+  contourAnchors = [];
+  if (!S.showContour) return [];
+  const L = topLayer();
+  if (!L || !L.Z) return [];
+  let lo = Infinity, hi = -Infinity;
+  for (let q=0;q<SZ;q++) { if (L.Z[q]<lo) lo=L.Z[q]; if (L.Z[q]>hi) hi=L.Z[q]; }
+  const iv = Math.max(5, S.contourInt);
+  const F = new Float32Array(SZ);
+  const perLevel = [];
+  for (let v = Math.ceil(lo/iv)*iv; v <= hi && perLevel.length < 80; v += iv) {
+    for (let q=0;q<SZ;q++) F[q] = L.Z[q] - v;
+    const polys = stitchContours(F);
+    if (polys.length) perLevel.push({ v, polys });   // 只保留真画出线的层级
+  }
+  const anchors = S.contourLabel
+    ? pickLabels(perLevel.map(o => ({ v: o.v, segs: polysToSegs(o.polys) })),
+                 mapL()*0.16, 30)
+    : [];
+  /* 缺口尺寸：数字越长缺口越长。给每个标注配上"沿线半长"和"垂直半宽"。
+     这是【沿线拉长的胶囊】，不是圆 —— 圆是各向同性的，一来会横切邻近的
+     等高线（密的时候一个数字切断好几条），二来在陡坡上会被拉成椭圆。 */
+  for (const a of anchors) {
+    const digits = String(Math.round(a.v)).length;
+    a.half  = mapL() * 0.012 * (0.6*digits + 1);
+    a.halfW = mapL() * 0.006;
+  }
+  const pos=[], nrm=[], col=[];
+  let cut = 0;
+  const cutByLevel = new Map();
+  for (const o of perLevel) {
+    const labs = anchors.filter(a => a.v === o.v);   // 只切自己那条线
+    const tests = labs.map(a => (x, y) => {
+      const ex = x-a.x, ey = y-a.y;
+      const along = ex*a.dx + ey*a.dy;               // 沿等高线方向的分量
+      const perp  = Math.abs(-ex*a.dy + ey*a.dx);    // 垂直方向的分量
+      return Math.abs(along) < a.half && perp < a.halfW;
+    });
+    const gapTest = tests.length
+      ? (x,y) => { for (const t of tests) if (t(x,y)) return true; return false; }
+      : null;
+    if (gapTest) {
+      let c = 0;
+      for (const P of o.polys) for (let i=0;i<P.length-1;i++)
+        if (gapTest((P[i][0]+P[i+1][0])/2, (P[i][1]+P[i+1][1])/2)) c++;
+      cut += c;
+      if (c) cutByLevel.set(o.v, c);
+    }
+    emitRibbon(o.polys, L.NX, L.NY, L.NZ, CW, L.Z, null, gapTest, pos, nrm, col);
+  }
+  contourAnchors = anchors;
+  contourInfo = { name: L.name, interval: iv, levels: perLevel.length,
+                  segs: pos.length/18, cut, cutLevels: cutByLevel.size,
+                  cutByLevel, labelLevels: new Set(anchors.map(a => a.v)).size };
+  return pos.length ? [mesh(pos,nrm,col,null)] : [];
+}
+
+/* ============================================================
+   右侧平面图：最高次序层面的等高线地形图（实时）
+   ============================================================ */
+const map2d = document.getElementById('map2d');
+const mctx = map2d.getContext('2d');
+const offMap = document.createElement('canvas');
+offMap.width = NS+1; offMap.height = NS+1;
+const offMapCtx = offMap.getContext('2d');
+const mapImg = offMapCtx.createImageData(NS+1, NS+1);
+
+/* 高程配色（低 → 高） */
+const RAMP = [[0.00,[ 62, 94, 74]],[0.22,[124,150, 96]],[0.45,[186,178,116]],
+              [0.68,[203,158,112]],[0.86,[224,206,180]],[1.00,[248,246,242]]];
+function rampRGB(t) {
+  t = t<0 ? 0 : t>1 ? 1 : t;
+  for (let i=1;i<RAMP.length;i++) if (t <= RAMP[i][0]) {
+    const a=RAMP[i-1], b=RAMP[i], k=(t-a[0])/(b[0]-a[0]);
+    return [0,1,2].map(j => Math.round(a[1][j]*(1-k) + b[1][j]*k));
+  }
+  return RAMP[RAMP.length-1][1];
+}
+let mapState = { name:'', lo:0, hi:0 };
+let mapInterSegs = 0;               // 平面图上画出的交线段数
+/* 把 rgba 拼成 CSS 串（交线颜色是 0~1 的浮点，要转回 0~255） */
+const rgbaOf = (c, a) =>
+  `rgba(${c.map(v => Math.round(Math.max(0,Math.min(1,v))*255)).join(',')},${a})`;
+function drawMap() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const side = Math.round(238*dpr);
+  if (map2d.width !== side) { map2d.width = side; map2d.height = side; }
+  const W = map2d.width, H = map2d.height;
+  mctx.setTransform(1,0,0,1,0,0);
+  const L = topLayer();
+  if (!L || !L.Z) {
+    mctx.fillStyle = '#eeeee9'; mctx.fillRect(0,0,W,H);
+    mapState = { name:'', lo:0, hi:0 };
+    document.getElementById('mapInfo').textContent = '没有可见层面';
+    return;
+  }
+  const n = NS+1;
+  let lo=Infinity, hi=-Infinity;
+  for (let q=0;q<SZ;q++){ if(L.Z[q]<lo)lo=L.Z[q]; if(L.Z[q]>hi)hi=L.Z[q]; }
+  const span = Math.max(1, hi-lo);
+  mapState = { name:L.name, lo, hi };
+
+  const d = mapImg.data;
+  for (let j=0;j<n;j++) for (let i=0;i<n;i++) {
+    const t = (L.Z[j*n+i]-lo)/span;
+    const r = n-1-j;                                  // 图像第 0 行在北
+    const p = (r*n+i)*4;
+    let c;
+    if (S.mapMode === 'gray')      { const g = Math.round(24 + 226*t); c = [g,g,g]; }
+    else if (S.mapMode === 'user') c = L.color;
+    else                           c = rampRGB(t);
+    d[p]=c[0]; d[p+1]=c[1]; d[p+2]=c[2]; d[p+3]=255;
+  }
+  offMapCtx.putImageData(mapImg, 0, 0);
+  mctx.imageSmoothingEnabled = true;
+  mctx.drawImage(offMap, 0, 0, W, H);
+
+  /* 等高线 + 高程数字：数字处把线断开，数字沿线方向旋转 —— 像真正的地形图 */
+  if (S.mapContour) {
+    const sc = W / mapL(), iv = Math.max(5, S.contourInt);
+    const F = new Float32Array(SZ);
+    const perLevel = [];
+    for (let v = Math.ceil(lo/iv)*iv; v <= hi; v += iv) {
+      for (let q=0;q<SZ;q++) F[q] = L.Z[q] - v;
+      const polys = stitchContours(F);
+      if (polys.length) perLevel.push({ v, polys });
+    }
+    mctx.font = Math.round(9.5*dpr) + 'px "Segoe UI",sans-serif';
+    const labels = S.contourLabel
+      ? pickLabels(perLevel.map(o => ({ v:o.v, segs: polysToSegs(o.polys) })),
+                   mapL()*0.15, 40)
+      : [];
+    // 量出每个数字的真实宽度定"沿线半长"；垂直半宽只留一个字高
+    for (const a of labels) {
+      a.half  = (mctx.measureText(String(Math.round(a.v))).width/2 + 4*dpr) / sc;
+      a.halfW = (6.5*dpr) / sc;
+    }
+    mctx.strokeStyle = S.mapMode === 'gray' ? 'rgba(0,0,0,0.72)' : 'rgba(44,32,20,0.8)';
+    mctx.lineWidth = dpr;
+    mctx.beginPath();
+    for (const o of perLevel) {
+      const labs = labels.filter(a => a.v === o.v);   // 只切自己那条线
+      const tests = labs.map(a => (x, y) => {
+        const ex = x-a.x, ey = y-a.y;
+        const along = ex*a.dx + ey*a.dy;
+        const perp  = Math.abs(-ex*a.dy + ey*a.dx);
+        return Math.abs(along) < a.half && perp < a.halfW;
+      });
+      for (const P0 of o.polys) {
+        const P = smoothPoly(P0, 2);                  // 平滑掉网格频率的锯齿
+        for (let i=0;i<P.length-1;i++) {
+          const mx=(P[i][0]+P[i+1][0])/2, my=(P[i][1]+P[i+1][1])/2;
+          let inGap = false;
+          for (const t of tests) if (t(mx,my)) { inGap = true; break; }
+          if (inGap) continue;                        // 数字占位处不画线
+          mctx.moveTo(P[i][0]*sc, H - P[i][1]*sc);
+          mctx.lineTo(P[i+1][0]*sc, H - P[i+1][1]*sc);
+        }
+      }
+    }
+    mctx.stroke();
+
+    mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
+    mctx.fillStyle = '#33261a';                       // 不加白边：缺口就是干净的底
+    for (const a of labels) {
+      const px = a.x*sc, py = H - a.y*sc;
+      // canvas 的 y 轴向下，所以方向取负；再翻正，避免数字倒着写
+      let ang = -Math.atan2(a.dy, a.dx);
+      if (ang >  Math.PI/2) ang -= Math.PI;
+      else if (ang < -Math.PI/2) ang += Math.PI;
+      mctx.save();
+      mctx.translate(px, py);
+      mctx.rotate(ang);
+      mctx.fillText(String(Math.round(a.v)), 0, 0);
+      mctx.restore();
+    }
+  }
+
+  /* 交线：各可见层面两两求交，投影到平面上（同样用平滑折线，不是逐格小段） */
+  mapInterSegs = 0;
+  if (S.mapInter) {
+    const vis = S.layers.filter(x => x.vis);
+    const sc = W / mapL();
+    const F = new Float32Array(SZ);
+    mctx.strokeStyle = rgbaOf(S.interColor, Math.max(0.25, S.interAlpha));
+    mctx.lineWidth = Math.max(1.5, 1.6*dpr);
+    mctx.beginPath();
+    for (let i=0;i<vis.length;i++) for (let j=i+1;j<vis.length;j++) {
+      for (let q=0;q<SZ;q++) F[q] = vis[i].Z[q] - vis[j].Z[q];
+      for (const P0 of stitchContours(F)) {
+        const P = smoothPoly(P0, 2);
+        mctx.moveTo(P[0][0]*sc, H - P[0][1]*sc);
+        for (let k=1;k<P.length;k++) {
+          mctx.lineTo(P[k][0]*sc, H - P[k][1]*sc);
+          mapInterSegs++;
+        }
+      }
+    }
+    mctx.stroke();
+  }
+
+  mctx.strokeStyle = 'rgba(0,0,0,0.28)'; mctx.lineWidth = 1;
+  mctx.strokeRect(0.5, 0.5, W-1, H-1);
+  mctx.fillStyle = 'rgba(20,20,20,0.78)';
+  mctx.font = Math.round(11*dpr) + 'px "Segoe UI",sans-serif';
+  mctx.textAlign = 'right';
+  mctx.fillText('N ↑', W - 6*dpr, 16*dpr);
+
+  document.getElementById('mapInfo').innerHTML =
+    `${L.name}（次序 ${L.order}）<br>高程 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m` +
+    (S.mapContour ? `　等高距 ${S.contourInt} m` : '') +
+    (S.mapInter && mapInterSegs ? `<br>交线 ${mapInterSegs} 段` : '');
+}
+
+/* 3D 里给等高线标高程：锚点投影到屏幕，用绝对定位的 span 显示。
+   标注层设了 pointer-events:none，所以不会挡住鼠标拖动。 */
+const labelBox = document.getElementById('labels');
+let labelPool = [];
+function updateLabels(MVP) {
+  const items = [];
+  if (S.showContour && S.contourLabel) {
+    for (const a of contourAnchors) {
+      const z = a.v + LIFT + 1.5;
+      const p0 = project([a.x, a.y, z], MVP);
+      if (!p0) continue;
+      // 沿线取一小段投影出去，用来定屏幕上数字的倾斜方向
+      const dl = mapL() * 0.03;
+      const p1 = project([a.x + a.dx*dl, a.y + a.dy*dl, z + a.dz*dl], MVP);
+      let deg = 0;
+      if (p1) {
+        deg = Math.atan2(p1[1]-p0[1], p1[0]-p0[0]) * 180/Math.PI;
+        if (deg >  90) deg -= 180;        // 翻正，别让数字倒着写
+        else if (deg < -90) deg += 180;
+      }
+      items.push({ s: p0, t: String(Math.round(a.v)), deg });
+    }
+  }
+  while (labelPool.length < items.length) {      // 复用 span，别每帧新建 DOM
+    const sp = document.createElement('span');
+    labelBox.appendChild(sp);
+    labelPool.push(sp);
+  }
+  for (let i = 0; i < labelPool.length; i++) {
+    const sp = labelPool[i];
+    if (i < items.length) {
+      sp.style.display = '';
+      sp.style.left = items[i].s[0] + 'px';
+      sp.style.top  = items[i].s[1] + 'px';
+      sp.style.transform =
+        `translate(-50%,-50%) rotate(${items[i].deg.toFixed(1)}deg)`;
+      sp.textContent = items[i].t;
+    } else sp.style.display = 'none';
+  }
+}
+
+/* ============================================================
+   重建
+   ============================================================ */
+let selSet = new Set();          // 被 Shift 选中的控制点下标
+let meshSurf = [], meshWire = null, meshFill = null, meshHandles = null,
+    meshSel = null, meshInter = [], meshContour = [];
+let camInit = false;
+
+function zRange() {
+  let lo=Infinity, hi=-Infinity;
+  for (const L of S.layers) if (L.z) for (let k=0;k<L.z.length;k++) {
+    if (L.z[k]<lo) lo=L.z[k]; if (L.z[k]>hi) hi=L.z[k]; }
+  if (!isFinite(lo)) { lo=0; hi=1000; }
+  return [lo,hi];
+}
+function rebuild(fit) {
+  dispose(meshWire); dispose(meshFill); dispose(meshHandles); dispose(meshSel);
+  for (const m of meshSurf) dispose(m);
+  for (const m of meshInter) dispose(m);
+  for (const m of meshContour) dispose(m);
+  for (const L of S.layers) evalLayer(L);
+  computeAlpha();
+  meshSurf = S.layers.map(L => L.vis ? buildLayerSurface(L) : null);
+  const A = S.layers[S.active];
+  if (A) {
+    const g = buildSkeletonOf(A);
+    meshWire=g.wire; meshFill=g.fill; meshHandles=g.handles; meshSel=g.sel;
+  } else { meshWire=meshFill=meshHandles=meshSel=null; }
+  meshInter = S.inter ? buildIntersections() : [];
+  meshContour = buildContours();
+  const [lo,hi] = zRange();
+  camTarget = [mapL()/2, mapL()/2, (lo+hi)/2];
+  if (fit || !camInit) { camDist = mapL()*1.95; camInit = true; }
+  drawMap();                      // 平面图随编辑实时更新
+}
+
+/* ============================================================
+   相机 / 交互
+   ============================================================ */
+let camAz = 238, camEl = 28, camDist = 7400;
+let camTarget = [2000,2000,600];
+function camEye() {
+  const el=camEl*D2R, az=camAz*D2R;
+  return [ camTarget[0]+camDist*Math.cos(el)*Math.cos(az),
+           camTarget[1]+camDist*Math.cos(el)*Math.sin(az),
+           camTarget[2]+camDist*Math.sin(el) ];
+}
+function camMVP() {
+  return mul(perspective(42*D2R, cv.width/cv.height, camDist*0.02, camDist*12),
+             lookAt(camEye(), camTarget, [0,0,1]));
+}
+function project(p, MVP) {
+  const w=cv.clientWidth, h=cv.clientHeight;
+  const x=MVP[0]*p[0]+MVP[4]*p[1]+MVP[8]*p[2]+MVP[12];
+  const y=MVP[1]*p[0]+MVP[5]*p[1]+MVP[9]*p[2]+MVP[13];
+  const k=MVP[3]*p[0]+MVP[7]*p[1]+MVP[11]*p[2]+MVP[15];
+  if (k<=0) return null;
+  return [(x/k*0.5+0.5)*w, (0.5-y/k*0.5)*h];
+}
+function activeCtrl(i,j) {
+  const N=S.res, L=S.layers[S.active];
+  return [i*SPACING, j*SPACING, L.z[j*N+i]];
+}
+function pick(mx,my) {
+  if (!S.layers[S.active]) return -1;
+  const MVP=camMVP(), N=S.res; let best=-1, bd=17*17;
+  for (let j=0;j<N;j++) for (let i=0;i<N;i++) {
+    const s=project(activeCtrl(i,j),MVP); if(!s) continue;
+    const d=(s[0]-mx)*(s[0]-mx)+(s[1]-my)*(s[1]-my);
+    if (d<bd){ bd=d; best=j*N+i; }
+  }
+  return best;
+}
+/* 拖动时 1 像素对应多少米。若按"视平面 1:1"来算（2·camDist·tan(fov/2)/画布高），
+   默认视角下是 ~7.5 m/px，拖满画布就是 6000 m —— 对这个 4 km 图幅太粗。
+   乘一个灵敏度系数把默认手感收细，并做成滑块让人自己调。 */
+const worldPerPixel = () => 2*camDist*Math.tan(21*D2R)/cv.clientHeight * S.dragSens;
+
+/* 空格 = 整个面上下平移；Shift = 多选；否则 = 拖动（选中多个时一起动） */
+let mode=null, dragIdx=-1, lastX=0, lastY=0, hoverIdx=-1, spaceDown=false;
+
+cv.addEventListener('mousedown', e => {
+  const r=cv.getBoundingClientRect();
+  const mx=e.clientX-r.left, my=e.clientY-r.top;
+  lastX=e.clientX; lastY=e.clientY;
+  if (e.button !== 0) { mode='orbit'; return; }          // 右键/中键 = 旋转
+  if (spaceDown) { mode='moveAll'; return; }             // 空格 = 整个面平移
+
+  const hit = pick(mx, my);
+  if (hit >= 0 && e.shiftKey) {                          // Shift = 加入/移出选择集
+    if (selSet.has(hit)) selSet.delete(hit); else selSet.add(hit);
+    mode='dragSel'; dragIdx=hit;
+    rebuild(false); render(); setInfo();
+    return;
+  }
+  if (hit >= 0) {
+    if (!selSet.has(hit)) { selSet.clear(); selSet.add(hit); }
+    mode='dragSel'; dragIdx=hit;
+    rebuild(false); render(); setInfo();
+    return;
+  }
+  mode='orbit';
+  if (selSet.size) { selSet.clear(); rebuild(false); render(); setInfo(); }
+});
+window.addEventListener('mouseup', () => { mode=null; dragIdx=-1; });
+
+window.addEventListener('mousemove', e => {
+  if (!mode) {
+    const r=cv.getBoundingClientRect();
+    if (e.clientX>=r.left && e.clientX<=r.right && e.clientY>=r.top && e.clientY<=r.bottom) {
+      const hI=pick(e.clientX-r.left, e.clientY-r.top);
+      if (hI!==hoverIdx) {
+        hoverIdx=hI;
+        cv.style.cursor = spaceDown ? 'grab' : (hI>=0 ? 'ns-resize' : 'crosshair');
+      }
+    }
+    return;
+  }
+  const L = S.layers[S.active];
+  if (!L) { mode=null; return; }
+
+  if (mode==='orbit') {
+    camAz=(camAz-(e.clientX-lastX)*0.42+360)%360;
+    camEl=Math.max(3,Math.min(88, camEl+(e.clientY-lastY)*0.32));
+    lastX=e.clientX; lastY=e.clientY; render();
+
+  } else if (mode==='dragSel') {
+    const dz = -(e.clientY-lastY)*worldPerPixel();
+    lastY=e.clientY; lastX=e.clientX;
+    for (const k of selSet) L.z[k] += dz;                 // 选中的点一起升降
+    rebuild(false); render(); setInfo();
+
+  } else if (mode==='moveAll') {
+    // 整个面沿 z 上下平移（与单点拖动同一套手感：上拖升高、下拖降低）
+    const dz = -(e.clientY-lastY)*worldPerPixel();
+    lastY=e.clientY; lastX=e.clientX;
+    for (let q=0;q<L.z.length;q++) L.z[q] += dz;
+    rebuild(false); render(); setInfo();
+  }
+});
+
+/* 空格状态：在输入框里打字时不能吃掉空格 */
+const typing = () => {
+  const a = document.activeElement;
+  return !!a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName);
+};
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !typing()) {
+    e.preventDefault();
+    if (!spaceDown) { spaceDown = true; cv.style.cursor = 'grab'; }
+  }
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') { spaceDown = false; cv.style.cursor = 'crosshair'; }
+});
+window.addEventListener('blur', () => { spaceDown = false; cv.style.cursor = 'crosshair'; });
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  camDist=Math.max(mapL()*0.4, Math.min(mapL()*4, camDist*Math.exp(e.deltaY*0.0011)));
+  updateSensNote();
+  render();
+}, { passive:false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+function resize() {
+  const dpr=Math.min(2, window.devicePixelRatio||1);
+  cv.width=Math.max(1,Math.round(cv.clientWidth*dpr));
+  cv.height=Math.max(1,Math.round(cv.clientHeight*dpr));
+}
+
+/* ============================================================
+   渲染：半透明层面按到相机距离【从远到近】排序，
+   深度测试开、深度写入关 —— 才能正确叠透
+   ============================================================ */
+function render() {
+  gl.viewport(0,0,cv.width,cv.height);
+  gl.clearColor(0.905,0.918,0.925,1);
+  gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  const MVP = camMVP(), eye = camEye();
+
+  const list = [];
+  for (let i=0;i<S.layers.length;i++) {
+    const L = S.layers[i];
+    if (!L.vis || !meshSurf[i]) continue;
+    // 排序键：图幅中心、该层平均高程到相机的距离。层面是同一域上的高度场，
+    // 这样做出来的远近次序足够准，也不像质心那样容易算错。
+    let cz = 0, n = 0;
+    for (let q = 0; q < SZ; q += 23) { cz += L.Z[q]; n++; }
+    const mx = mapL()/2, my = mapL()/2, mz = cz / n;
+    list.push({ L, m: meshSurf[i],
+      d: (mx-eye[0])**2 + (my-eye[1])**2 + (mz-eye[2])**2 });
+  }
+  list.sort((a,b) => b.d - a.d);              // 半透明混合必须从远到近画
+
+  /* 层面【写深度】：这是"先后遮挡"的关键 —— 近的层面挡住远的。
+     配合片元着色器里对全透明片元的 discard，被次序规则变透明的部分
+     不写深度，于是它下面的更高次序层面就能透出来。 */
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthMask(true);
+  for (const o of list) drawSurf(o.m, MVP, 0.52, 0.60, o.L.alpha, true);
+
+  /* 交线 + 最高次序层面的等高线：都在关掉深度测试【之前】画，
+     才能真正被前面的层面遮住 */
+  for (const m of meshInter)
+    drawGeom(m, MVP, 1.0, 0.0, S.interAlpha, false, gl.TRIANGLES, S.interColor);
+  for (const m of meshContour)
+    drawGeom(m, MVP, 1.0, 0.0, S.contourAlpha, false, gl.TRIANGLES, S.contourColor);
+
+  /* 骨架：默认透视，所以放在关掉深度测试之后 —— 编辑时永远看得见抓得着 */
+  if (S.xray) gl.disable(gl.DEPTH_TEST);
+  if (S.showFill && meshFill) {
+    gl.depthMask(false);
+    drawSurf(meshFill, MVP, 0.55, 0.60, 0.30, true);
+    gl.depthMask(true);
+  }
+  if (S.showWire && meshWire) drawLines(meshWire, MVP);
+  if (S.showHandles) { drawPts(meshHandles, MVP, 9); drawPts(meshSel, MVP, 16); }
+  if (S.xray) gl.enable(gl.DEPTH_TEST);
+  updateLabels(MVP);
+}
+
+/* ============================================================
+   界面
+   ============================================================ */
+function setInfo() {
+  const [lo,hi] = zRange(), A = S.layers[S.active];
+  let s = `共 <b>${S.layers.length}</b> 个层面　控制网 <b>${S.res}×${S.res}</b>　` +
+          `图幅 <b>${(mapL()/1000).toFixed(1)} km</b><br>高程范围 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m`;
+  if (A) s += `<br>编辑中：<b>${A.name}</b>（次序 <b>${A.order}</b>，不透明度 ${A.alpha.toFixed(2)}）`;  if (selSet.size && A) {
+    const one = selSet.size === 1;
+    const k = [...selSet][0];
+    s += `<br>已选中 <b>${selSet.size}</b> 个控制点` +
+         (one ? `（(${k%S.res}, ${(k/S.res)|0}) = <b>${A.z[k].toFixed(0)} m</b>）` : '') +
+         `　拖动其中任一个即可一起升降`;
+  }
+  if (S.orderRule) {
+    let hid = 0;
+    for (const L of S.layers) if (L.S) for (let q=0;q<SZ;q++) if (L.S[q] < 0) hid++;
+    s += `<br>次序规则：<b>${hid ? '已触发（' + (hid/(SZ*S.layers.length)*100).toFixed(0) + '% 的层面面积被压在下方的更高次序层面顶掉）' : '未触发（叠置正常）'}</b>`;
+  }
+  if (S.showContour) {
+    if (!contourInfo.name) s += `<br>等高线：当前没有可见层面`;
+    else if (!contourInfo.levels)
+      s += `<br>等高线：<b>${contourInfo.name}</b> 在此等高距下没有可画的等高线` +
+           `（层面是水平面、或高差小于等高距 ${contourInfo.interval} m —— 水平面上等高线是退化的）`;
+    else
+      s += `<br>等高线：画在 <b>${contourInfo.name}</b> 上，等高距 <b>${contourInfo.interval} m</b>，共 <b>${contourInfo.levels}</b> 条`;
+  }
+  document.getElementById('info').innerHTML = s;
+  updateSensNote();
+}
+function computeAlphaAll() {
+  computeAlpha();
+  for (let i=0;i<S.layers.length;i++) {
+    const m = meshSurf[i]; if (!m || !m._s) continue;
+    m._s.set(S.layers[i].S);
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.sbuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, m._s);
+  }
+}
+function hexOf(c){ return '#' + c.map(v=>Math.max(0,Math.min(255,v|0)).toString(16).padStart(2,'0')).join(''); }
+
+/* 列表按真正的层序排列：下老上新。
+   排序键是沉积次序（降序），所以列表最上面 = 次序最高 = 最新，
+   最下面 = 次序最低 = 最老 —— 就是地层柱的画法。 */
+function sortedLayers() {
+  return S.layers.map((L, i) => ({ L, i }))
+    .sort((a, b) => (b.L.order - a.L.order) || (a.i - b.i));
+}
+function buildLayerList() {
+  const box = document.getElementById('layerList');
+  box.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'ordhint top';
+  head.textContent = '▲ 新（沉积次序高）';
+  box.appendChild(head);
+
+  sortedLayers().forEach(({ L, i }) => {
+    const d = document.createElement('div');
+    d.className = 'layer' + (i===S.active ? ' on' : '');
+    d.innerHTML =
+      '<div class="l1">' +
+        `<input type="radio" name="actL" ${i===S.active?'checked':''}>` +
+        `<input type="color" value="${hexOf(L.color)}">` +
+        `<input type="text" value="${L.name.replace(/"/g,'&quot;')}">` +
+        '<span class="ordlab">次序</span>' +
+        `<input type="number" class="ord" min="1" max="99" value="${L.order}">` +
+        '<button class="del" title="删除">✕</button>' +
+      '</div>' +
+      '<div class="l2">不透明' +
+        `<input type="range" min="0" max="1" step="0.05" value="${L.alpha}">` +
+        `<span class="opv">${L.alpha.toFixed(2)}</span>` +
+        `<input type="checkbox" ${L.vis?'checked':''} title="显示">` +
+      '</div>';
+    const rad = d.querySelector('input[type=radio]');
+    const col = d.querySelector('input[type=color]');
+    const nm  = d.querySelector('input[type=text]');
+    const ord = d.querySelector('input.ord');
+    const op  = d.querySelector('input[type=range]');
+    const vis = d.querySelector('input[type=checkbox]');
+    rad.addEventListener('change', () => { S.active=i; selSet.clear(); buildLayerList(); rebuild(false); render(); setInfo(); });
+    col.addEventListener('input', () => {
+      L.color = [1,3,5].map(k => parseInt(col.value.substr(k,2),16));
+      rebuild(false); render();
+    });
+    nm.addEventListener('input', () => { L.name = nm.value; setInfo(); });
+    ord.addEventListener('input', () => {
+      L.order = Math.max(1, Math.min(99, +ord.value || 1));
+      computeAlphaAll(); render(); setInfo();      // 次序只改透明度，不必重建几何
+    });
+    ord.addEventListener('change', () => buildLayerList());   // 离焦后再重排，免得打断输入
+    op.addEventListener('input', () => {
+      L.alpha = +op.value;
+      d.querySelector('.opv').textContent = L.alpha.toFixed(2);
+      render(); setInfo();
+    });
+    vis.addEventListener('change', () => { L.vis = vis.checked; rebuild(false); render(); setInfo(); });
+    d.querySelector('.del').addEventListener('click', () => {
+      if (S.layers.length <= 1) return;
+      S.layers.splice(i,1);
+      S.active = Math.max(0, Math.min(S.layers.length-1, S.active > i ? S.active-1 : S.active));
+      selSet.clear(); buildLayerList(); rebuild(true); render(); setInfo();
+    });
+    box.appendChild(d);
+  });
+
+  const foot = document.createElement('div');
+  foot.className = 'ordhint bot';
+  foot.textContent = '▼ 老（沉积次序低）';
+  box.appendChild(foot);
+}
+function after(fit) { rebuild(fit); setInfo(); render(); }
+
+document.getElementById('cRes').addEventListener('change', e => {
+  resampleAll(+e.target.value); selSet.clear(); buildLayerList(); after(true);
+});
+document.getElementById('cSurf').addEventListener('change', e => { S.surf=e.target.value; after(false); });
+const cbs = { cWire:'showWire', cFill:'showFill', cHandles:'showHandles',
+              cXray:'xray', cInter:'inter', cRule:'orderRule', cCurv:'curv',
+              cContour:'showContour', cMapContour:'mapContour',
+              cContourLabel:'contourLabel', cMapInter:'mapInter' };
+for (const id in cbs) {
+  const el = document.getElementById(id);
+  S[cbs[id]] = el.checked;
+  el.addEventListener('change', () => { S[cbs[id]] = el.checked; after(false); });
+}
+const on = (id, fn) => document.getElementById(id).addEventListener('click', fn);
+/* 交线颜色 / 不透明度走 uniform，改它们只需重绘，不必重建几何 */
+document.getElementById('cInterColor').addEventListener('input', e => {
+  const h = e.target.value;
+  S.interColor = [1,3,5].map(k => parseInt(h.substr(k,2),16)/255);
+  render();
+});
+document.getElementById('cInterAlpha').addEventListener('input', e => {
+  S.interAlpha = +e.target.value;
+  document.getElementById('cInterAlpha_v').textContent = S.interAlpha.toFixed(2);
+  render();
+});
+/* 等高线：颜色/不透明度走 uniform（只重绘）；等高距改变几何（要重建） */
+document.getElementById('cContourInt').addEventListener('input', e => {
+  S.contourInt = +e.target.value;
+  document.getElementById('cContourInt_v').textContent = S.contourInt + ' m';
+  rebuild(false); render(); setInfo();
+});
+document.getElementById('cContourColor').addEventListener('input', e => {
+  S.contourColor = [1,3,5].map(k => parseInt(e.target.value.substr(k,2),16)/255);
+  render();
+});
+document.getElementById('cContourAlpha').addEventListener('input', e => {
+  S.contourAlpha = +e.target.value;
+  document.getElementById('cContourAlpha_v').textContent = S.contourAlpha.toFixed(2);
+  render();
+});
+/* 平面图的配色模式 */
+document.querySelectorAll('input[name=mapMode]').forEach(r =>
+  r.addEventListener('change', () => { S.mapMode = r.value; drawMap(); }));
+
+/* 拖动灵敏度：标称值随手把相机远近变化，所以每次缩放后要刷新 */
+function updateSensNote() {
+  const mpp = worldPerPixel();
+  document.getElementById('sensNote').innerHTML =
+    `当前 <b>${mpp.toFixed(2)} m / 像素</b>` +
+    `（上拖 100 px = 升降 ${(mpp*100).toFixed(0)} m，拖满画布高约 ${(mpp*cv.clientHeight).toFixed(0)} m）`;
+}
+document.getElementById('cDragSens').addEventListener('input', e => {
+  S.dragSens = +e.target.value;
+  document.getElementById('cDragSens_v').textContent = S.dragSens.toFixed(2);
+  updateSensNote();
+});
+on('bAddLayer', () => { addLayer(true); S.active=S.layers.length-1; selSet.clear(); buildLayerList(); after(true); });
+on('bValley', () => { seedLayer(S.layers[S.active],'valley'); after(true); });
+on('bHills',  () => { seedLayer(S.layers[S.active],'hills');  after(true); });
+on('bFlat',   () => { seedLayer(S.layers[S.active],'flat');   after(false); });
+on('bRand',   () => { seedLayer(S.layers[S.active],'rand');   after(true); });
+on('bRelax',  () => { relaxLayer(S.layers[S.active]); after(false); });
+on('bReset',  () => { camAz=238; camEl=28; after(true); });
+on('bSpin',   () => { S.autoRotate=!S.autoRotate;
+  document.getElementById('bSpin').style.color = S.autoRotate ? '#8a5a3b' : ''; });
+window.addEventListener('resize', () => { resize(); render(); });
+
+/* ============================================================
+   保存 / 打开 / 导出
+   ============================================================ */
+function snapshot() {
+  return {
+    format: 'outcrop-skeleton', version: 1, spacing: SPACING,
+    res: S.res, surf: S.surf,
+    inter: { color: S.interColor.slice(), alpha: S.interAlpha },
+    contour: { show: S.showContour, interval: S.contourInt, label: S.contourLabel,
+               color: S.contourColor.slice(), alpha: S.contourAlpha },
+    map: { mode: S.mapMode, contour: S.mapContour, inter: S.mapInter,
+           dragSens: S.dragSens },
+    view: { az: camAz, el: camEl, dist: camDist },
+    layers: S.layers.map(L => ({
+      name: L.name, order: L.order, color: L.color.slice(),
+      alpha: L.alpha, vis: L.vis,
+      z: Array.from(L.z, v => Math.round(v * 100) / 100),
+    })),
+  };
+}
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function saveFile() {
+  downloadBlob(new Blob([JSON.stringify(snapshot())], { type:'application/json' }),
+               '地层模型.json');
+}
+function exportPng() {
+  render();                                  // 保证缓冲里是最新一帧
+  const a = document.createElement('a');
+  a.href = cv.toDataURL('image/png');
+  a.download = '地层模型.png';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function loadText(text) {
+  const d = JSON.parse(text);
+  if (!d || d.format !== 'outcrop-skeleton') throw new Error('不是本程序保存的文件');
+  const res = d.res || 9;
+  const layers = (d.layers || []).map(o => {
+    const L = mkLayer(o.name || '层面', o.order || 1,
+                      (o.color && o.color.length === 3) ? o.color : [190,170,140],
+                      (typeof o.alpha === 'number') ? o.alpha : 0.55);
+    L.vis = o.vis !== false;
+    const z = Array.from(o.z || []);
+    if (z.length !== res*res) throw new Error('层面数据长度与控制网分辨率不符');
+    L.z = new Float32Array(z);
+    return L;
+  });
+  if (!layers.length) throw new Error('文件里没有层面');
+  S.res = res;
+  S.surf = (d.surf === 'approx') ? 'approx' : 'interp';
+  S.layers = layers;
+  S.active = 0;
+  selSet.clear();
+  document.getElementById('cRes').value = String(S.res);
+  document.getElementById('cSurf').value = S.surf;
+  if (d.inter) {
+    if (d.inter.color) S.interColor = d.inter.color.slice();
+    if (typeof d.inter.alpha === 'number') S.interAlpha = d.inter.alpha;
+    const hx = '#' + S.interColor.map(v =>
+      Math.max(0, Math.min(255, Math.round(v*255))).toString(16).padStart(2,'0')).join('');
+    document.getElementById('cInterColor').value = hx;
+    document.getElementById('cInterAlpha').value = String(S.interAlpha);
+    document.getElementById('cInterAlpha_v').textContent = S.interAlpha.toFixed(2);
+  }
+  if (d.contour) {
+    if (typeof d.contour.show === 'boolean') S.showContour = d.contour.show;
+    if (typeof d.contour.label === 'boolean') S.contourLabel = d.contour.label;
+    if (typeof d.contour.interval === 'number') S.contourInt = d.contour.interval;
+    if (d.contour.color) S.contourColor = d.contour.color.slice();
+    if (typeof d.contour.alpha === 'number') S.contourAlpha = d.contour.alpha;
+    document.getElementById('cContour').checked = S.showContour;
+    document.getElementById('cContourLabel').checked = S.contourLabel;
+    document.getElementById('cContourInt').value = String(S.contourInt);
+    document.getElementById('cContourInt_v').textContent = S.contourInt + ' m';
+    document.getElementById('cContourColor').value = '#' + S.contourColor.map(v =>
+      Math.max(0, Math.min(255, Math.round(v*255))).toString(16).padStart(2,'0')).join('');
+    document.getElementById('cContourAlpha').value = String(S.contourAlpha);
+    document.getElementById('cContourAlpha_v').textContent = S.contourAlpha.toFixed(2);
+  }
+  if (d.map) {
+    if (d.map.mode) S.mapMode = d.map.mode;
+    if (typeof d.map.contour === 'boolean') S.mapContour = d.map.contour;
+    if (typeof d.map.inter === 'boolean') S.mapInter = d.map.inter;
+    if (typeof d.map.dragSens === 'number') S.dragSens = d.map.dragSens;
+    if (typeof S.dragSens !== 'number') S.dragSens = 0.3;
+    document.getElementById('cDragSens').value = String(S.dragSens);
+    document.getElementById('cDragSens_v').textContent = S.dragSens.toFixed(2);
+    document.getElementById('cMapContour').checked = S.mapContour;
+    document.getElementById('cMapInter').checked = S.mapInter;
+    document.querySelectorAll('input[name=mapMode]').forEach(r => {
+      r.checked = (r.value === S.mapMode);
+    });
+  }
+  buildLayerList();
+  rebuild(false);
+  if (d.view) {
+    camAz = +d.view.az || camAz;
+    camEl = Math.max(3, Math.min(88, +d.view.el || camEl));
+    camDist = Math.max(mapL()*0.4, Math.min(mapL()*4, +d.view.dist || camDist));
+  }
+  render(); setInfo();
+}
+const fileIn = document.getElementById('fileIn');
+on('bSave', saveFile);
+on('bPng',  exportPng);
+on('bOpen', () => fileIn.click());
+fileIn.addEventListener('change', () => {
+  const f = fileIn.files && fileIn.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try { loadText(String(rd.result)); }
+    catch (err) { alert('打开失败：' + err.message); }
+    fileIn.value = '';
+  };
+  rd.readAsText(f);
+});
+
+/* ============================================================
+   初始场景：一个层面，且是一个平面（所有控制点等高）。
+   要造倾斜面就拖控制点，或改 seedLayer 里的 'flat' 分支。
+   ============================================================ */
+resize();
+{
+  const L1 = addLayer(false);
+  seedLayer(L1, 'flat');
+  L1.name = '层面 1'; L1.order = 1; L1.color = [196,168,112]; L1.alpha = 0.55;
+  S.active = 0;
+}
+buildLayerList();
+rebuild(true);
+setInfo();
+render();
+
+function loop() {
+  if (S.autoRotate) { camAz=(camAz+0.25)%360; render(); }
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
