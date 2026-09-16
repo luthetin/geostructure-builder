@@ -634,16 +634,32 @@ function buildStratum(k) {
          厚度为负时底面也判负 → 整层消失
        · 地表之上不许有东西：C_k ≤ 地表高程（地表是 i>k 里的一员），
          顶点高过地表就判负 → 剪掉
-       · 最上面那层的顶面是盖子：那一层只有 i=n−1 一个参照，C = 地表高程，
-         顶面的场恰好是 0 → 永远画着，地表天然是完整的盖子
      因为 C 是连续的，所有边界（尖灭线、裁剪线）都精确落在界面的交线上。 */
-  const C = new Float32Array(SZ);
+  /* 地表面 = 所有界面的【上包络】：env(x,y) = max over 全部界面 of z_j
+     这是露头带的来源 —— 每一条带就是某个界面正好成为包络的那片区域，
+     带与带的分界就是两条界面的交线。 */
+  const env = new Float32Array(SZ);
   for (let q=0;q<SZ;q++) {
-    let lo = Infinity;
-    for (let i=k+1;i<S.ifaces.length;i++) { const z = S.ifaces[i].Z[q]; if (z < lo) lo = z; }
-    C[q] = isFinite(lo) ? lo : bot.Z[q];
+    let hi = -Infinity;
+    for (const I of S.ifaces) { const z = I.Z[q]; if (z > hi) hi = z; }
+    env[q] = isFinite(hi) ? hi : top.Z[q];
   }
-  const fieldAt = (q, z) => S.orderRule ? (C[q] - z) : 1e9;
+  const thickAt = q => top.Z[q] - bot.Z[q];
+  /* 【面】的场 = min( 地表面高程 − 顶点高程 , 本层厚度 )
+       前一项：这张面高过地表面就没有意义（那时它在岩石内部，是"地表层之上那东西"的根源）
+       后一项：本层尖灭了，这张面也就不存在
+     两个端点都是连续的，所以带边界精确落在交线上。 */
+  const capAt = (q, z) => {
+    if (!S.orderRule) return 1e9;
+    const a = env[q] - z, t = thickAt(q);
+    return a < t ? a : t;
+  };
+  /* 【侧壁】的场 = 本层厚度 —— 剖面按岩层实际产状画满。
+     侧壁是剖面：规则让"面上方的东西"透明，但面本身、以及面之间的岩石
+     要正常显示，否则剖面上会空掉一块（实测过：97 列里 45 列有洞、占总高 24.6%）。
+     再没有别的裁剪：本层的上下界面都在上包络之下，所以侧壁不会冒出去。 */
+  const wallAt = (q) => S.orderRule ? thickAt(q) : 1e9;
+  const fieldAt = capAt;
   let kref = 1e-12;
   if (S.curv) {
     const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
@@ -705,10 +721,10 @@ function buildStratum(k) {
       const at = pos.length/3;
       pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
       pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
-      /* 侧壁同样两条判据，而且要逐顶点算：裁剪边界可能落在柱子的中间，
-         高出地表的那一截要被切掉，剩下的仍然实心。 */
-      const th = [fieldAt(q1, zb1), fieldAt(q2, zb2), fieldAt(q2, zt2),
-                  fieldAt(q1, zb1), fieldAt(q2, zt2), fieldAt(q1, zt1)];
+      /* 侧壁用【本层厚度】：本层存在就整条实心，剖面不挖洞。
+         规则只管"面上方的东西"，面本身和面之间的岩石要正常显示。 */
+      const t1 = wallAt(q1), t2 = wallAt(q2);
+      const th = [t1, t2, t2, t1, t2, t1];
       for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }

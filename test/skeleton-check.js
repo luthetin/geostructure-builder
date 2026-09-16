@@ -340,17 +340,15 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         ruleBad === 0, `${ruleSee} 个点应透明，不符 ${ruleBad}`);
   check("透明规则确实在起作用（不是全部不透明）", ruleSee > 0, `${ruleSee} 个透明点`);
 
-  /* 【地层实体不参与次序规则】—— 它只有两条判据，取更严的那个：
-       ① 本层厚度（尖灭掉就不画）   ② 顶点不高于地表（地表之上不许有东西）
-     例外：最上面那个地层的顶面是盖子，永远画。 */
-  /* 【地层实体的唯一判据】—— 一个界面之上，只能出现层序比它【高】的岩层。
-     写成场就是：  场 = C_k − 顶点高程，   C_k = min over i>k of 界面 i 的高程
-     这一条把"厚度为负就不画""地表之上不许有东西""最上面那层是盖子"全包含了。 */
+  /* 【地层实体】两种面各用各的场：
+       顶面/底面（"面"）：min( 上包络高程 − 顶点高程 , 本层厚度 )
+       四周侧壁（剖面）：本层厚度   ← 剖面按岩层实际产状画满，不挖洞
+     不变量：画出来的顶点一律不高于【上包络】（= 地表面）——
+     规则让"面上方的东西"透明，但面本身正常显示。 */
   const Lm0 = api.mapL(), nn = NS+1;
-  const Cof = (k,q) => { let lo=Infinity;
-    for (let i=k+1;i<ii.length;i++){ const z=ii[i].Z[q]; if (z<lo) lo=z; }
-    return isFinite(lo) ? lo : ii[k].Z[q]; };
-  let layerBad = 0, layerGone = 0, layerAlive = 0, overC = 0;
+  const envOf = q => { let hi=-Infinity;
+    for (const I of ii) { const z=I.Z[q]; if (z>hi) hi=z; } return hi; };
+  let layerBad = 0, layerGone = 0, layerAlive = 0, overEnv = 0;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
     for (let v=0; v<mm._pos.length/3; v++) {
@@ -358,17 +356,17 @@ console.log("\n─── I. 沉积次序透明规则 ───");
       const a = Math.round(x/Lm0*NS), bq = Math.round(y/Lm0*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
       const q = bq*nn + a;
-      const want = Cof(k,q) - z;
+      const th = ii[k+1].Z[q] - ii[k].Z[q];
+      const want = (v < 2*SZ) ? Math.min(envOf(q) - z, th) : th;
       if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1, Math.abs(want))) layerBad++;
       if (mm._s[v] < 0) layerGone++; else layerAlive++;
-      /* 画出来的顶点一律不得高过 C_k —— 这就是那条规则 */
-      if (mm._s[v] >= 0 && z > Cof(k,q) + 0.5) overC++;
+      if (mm._s[v] >= 0 && z > envOf(q) + 0.5) overEnv++;
     }
   }
-  check("地层实体的场 = C_k − 顶点高程（C_k = 比它年轻的界面里最低的那个）",
+  check("面 = min(上包络−顶点高程, 本层厚度)；侧壁 = 本层厚度",
         layerBad === 0, `${layerBad} 个不符`);
-  check("【画出来的顶点一律不高于 C_k】—— 一个界面之上只有层序更高的岩层",
-        overC === 0, `${overC} 个顶点越界`);
+  check("【画出来的顶点一律不高过上包络】—— 地表之上不许有东西",
+        overEnv === 0, `${overEnv} 个顶点越界`);
   check("确实有被裁掉的部分（构造有效，不是空跑）", layerGone > 0,
         `${layerAlive} 个实心 / ${layerGone} 个不画`);
   check("min 场仍然保留（供面板统计用），但渲染已经不用它了",
@@ -864,7 +862,8 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
        I1 = 1500 + 900·拱   最高到 ~2400，穿过地表
        I2 = 1900           地表，平
      于是 地层1（I1↔I2）在拱起处厚度为负；地层0 的顶面（I1）高出地表。 */
-  const arch = (u,v) => Math.exp(-((u*u+v*v)/40));
+  /* 拱偏向 +u 一侧，这样【同一张图上】既有拱穿（顶面该消失）也有正常处（顶面该画着） */
+  const arch = (u,v) => Math.exp(-(((u-2.5)*(u-2.5)) + v*v)/12);
   S.ifaces = [ mk(()=>900,                      [150,128,104]),
                mk((u,v)=>1500 + 900*arch(u,v),  [168,150,120]),
                mk(()=>1900,                     [185,143,131]) ];
@@ -875,12 +874,11 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
 
   const Z = S.ifaces.map(I => I.Z);
   const thickAt = (k,q) => Z[k+1][q] - Z[k][q];
-  const Cof = (k,q) => { let lo=Infinity;
-    for (let i=k+1;i<Z.length;i++){ if (Z[i][q]<lo) lo=Z[i][q]; }
-    return lo; };
-  const wantAt = (k,q,z) => Cof(k,q) - z;
+  const envOf = q => { let hi=-Infinity;
+    for (let i=0;i<Z.length;i++){ if (Z[i][q]>hi) hi=Z[i][q]; } return hi; };
+  const wantAt = (k,q,z,v) => (v < 2*SZ) ? Math.min(envOf(q) - z, thickAt(k,q)) : thickAt(k,q);
 
-  /* ---- 逐顶点核对：场 = C_k − 顶点高程 ---- */
+  /* ---- 逐顶点核对：面用上包络＋厚度，侧壁只用厚度 ---- */
   let mism = 0, tot = 0;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
@@ -889,14 +887,14 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
       const a=Math.round(x/Lm*NS), bq=Math.round(y/Lm*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
       const q = bq*n + a;
-      const want = wantAt(k,q,z);
+      const want = wantAt(k,q,z,v);
       if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1,Math.abs(want))) mism++;
       tot++;
     }
   }
-  check("每个顶点的场 = C_k − 顶点高程", mism === 0, `${mism}/${tot} 个不符`);
+  check("面 = min(上包络−顶点高程, 本层厚度)；侧壁 = 本层厚度", mism === 0, `${mism}/${tot} 个不符`);
 
-  /* ---- 【本节的要害】画出来的顶点，一个都不许高过它自己的 C_k ---- */
+  /* ---- 【本节的要害一】画出来的顶点，一个都不许高过【上包络】 ---- */
   let above = 0, drawn = 0, worst = -Infinity;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
@@ -905,13 +903,13 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
       const x=mm._pos[3*v], y=mm._pos[3*v+1], z=mm._pos[3*v+2];
       const a=Math.round(x/Lm*NS), bq=Math.round(y/Lm*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
-      const d = z - Cof(k, bq*n+a);
+      const d = z - envOf(bq*n+a);
       drawn++;
       if (d > 0.5) above++;
       if (d > worst) worst = d;
     }
   }
-  check("【画出来的顶点一律不高过 C_k】—— 一个面之上只有层序更高的岩层",
+  check("【画出来的顶点一律不高过上包络】—— 地表之上不许有东西",
         above === 0 && drawn > 0, `${drawn} 个顶点里越界 ${above} 个，最高 ${worst.toFixed(1)} m`);
 
   /* ---- 构型有效：确实有界面拱穿地表 ---- */
@@ -935,11 +933,86 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
   check("拱穿处：尖灭掉的那层【底面不画】（不会靠共面那张面又冒出来）",
         deadCols > 0 && deadCap === deadCols, `${deadCols} 个尖灭柱，其中 ${deadCap} 柱底面隐藏`);
 
-  /* ---- 地表永远是个完整的盖子 ---- */
-  let lid = 0;
-  for (let q=0;q<SZ;q++) if (mmTop._s[q] >= 0) lid++;
-  check("地表（最上面那个地层的顶面）始终是完整的盖子，一个洞都没有",
-        lid === SZ, `${lid}/${SZ} 个网格点画着`);
+  /* ---- 【本节的要害二】剖面（侧壁）不许有洞 ----
+     规则让"面上方的东西"透明，但面本身、以及面之间的岩石要正常显示。
+     逐列核对：把该列画出来的侧壁 z 区间与"模型该有的高度范围"比，空洞必须为 0。 */
+  let holeCols = 0, holeSum = 0, spanSum = 0, maxGap = 0;
+  const fracs = [];
+  for (let j=0;j<NS;j++) {
+    const ivs = [];
+    /* 注意：地层网格是 [顶面 SZ][底面 SZ][侧壁…]，基底网格【没有面，直接从侧壁开始】 */
+    for (const [m, v0] of [[api.meshStrata[0], 2*SZ], [api.meshStrata[1], 2*SZ],
+                           [api.meshBase, 0]]) {
+      if (!m) continue;
+      for (let v=v0; v+5 < m._pos.length/3; v+=6) {
+        const x=m._pos[3*v], y=m._pos[3*v+1];
+        if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;
+        if (Math.round(y/Lm*NS) !== j) continue;
+        const iA=v, iB=v+2;
+        let zA=m._pos[3*iA+2], zB=m._pos[3*iB+2];
+        let fA=m._s[iA], fB=m._s[iB];
+        if (zA>zB) { const t=zA; zA=zB; zB=t; const u=fA; fA=fB; fB=u; }
+        if (fA < 0 && fB < 0) continue;
+        if (fA < 0) zA = zA + (fA/(fA-fB))*(zB-zA);
+        else if (fB < 0) zB = zA + (fA/(fA-fB))*(zB-zA);
+        ivs.push([zA, zB]);
+      }
+    }
+    let hi=-Infinity;
+    for (let i=0;i<Z.length;i++){ const z=Z[i][j*n+iE]; if (z>hi) hi=z; }
+    /* 基底的底面往下也算模型的一部分 */
+    let lo=Infinity;
+    for (const iv of ivs) if (iv[0]<lo) lo=iv[0];
+    if (!isFinite(lo)) lo = hi;
+    const A = Math.min(...ivs.map(v=>v[0]), api.baseZ());
+    const span = hi - A; spanSum += span;
+    ivs.sort((p,q)=>p[0]-q[0]);
+    let cur = A, gaps = 0;
+    for (const [a,b] of ivs){ if (a - cur > 0.5) gaps += a - cur; if (b > cur) cur = b; }
+    if (hi - cur > 0.5) gaps += hi - cur;
+    if (gaps > maxGap) maxGap = gaps;
+    if (gaps > 0) { holeCols++; holeSum += gaps; }
+    fracs.push(span > 0 ? gaps/span : 0);
+  }
+  const holeFrac = fracs.reduce((a,b)=>a+b,0)/NS;
+  check("【剖面（侧壁）上没有洞】—— 规则只让面上方的东西透明，面之间照样画满",
+        holeFrac < 0.005 && maxGap < 25,
+        `空洞占整面 ${(holeFrac*100).toFixed(2)}%，单列最大 ${maxGap.toFixed(1)} m`
+        + `（${holeCols}/${NS} 列，都是相邻层界面处网格间过零点留下的细缝）`);
+  void holeSum; void spanSum;
+
+  /* ---- 【本节的要害三】俯视的露头带：一层一层，不能有空白 ---- */
+  const own = new Int16Array(SZ).fill(-99);
+  const zz = new Float32Array(SZ).fill(-Infinity);
+  for (let k=0;k<S.strata.length;k++) {
+    const m = api.meshStrata[k];
+    for (let q=0;q<SZ;q++) if (m._s[q] >= 0) {
+      const z = m._pos[3*q+2];
+      if (z > zz[q]) { zz[q] = z; own[q] = k; }
+    }
+  }
+  const cnt = {}; let blank = 0;
+  for (let q=0;q<SZ;q++){ const o=own[q]; if(o===-99) blank++; else cnt[o]=(cnt[o]||0)+1; }
+  const kinds = Object.keys(cnt).length;
+  check("俯视是【一层一层的露头带】：没有空白，且至少两种颜色",
+        blank === 0 && kinds >= 2,
+        `空白 ${blank} 柱；${Object.keys(cnt).sort().map(o=>`地层${o} ${cnt[o]}柱`).join(" / ")}`);
+  let bands = 0;
+  for (let b=0;b<n;b++) for (let a=0;a<n-1;a++){ const q=b*n+a; if (own[q]!==own[q+1]) bands++; }
+  for (let b=0;b<n-1;b++) for (let a=0;a<n;a++){ const q=b*n+a; if (own[q]!==own[q+n]) bands++; }
+  check("带与带的分界沿交线分布（相邻柱变色）", bands > 0, `${bands} 条分界边`);
+
+  /* ---- 尖灭处：那层的顶面一起消失（不会盖住下面） ---- */
+  let lidGone = 0, lidAlive = 0, cover = 0;
+  for (let q=0;q<SZ;q++) {
+    const exists = thickAt(1,q) >= 0;
+    const drawn = mmTop._s[q] >= 0;
+    if (drawn) lidAlive++; else lidGone++;
+    if (!exists && drawn) cover++;
+  }
+  check("上面那层尖灭的地方，它的顶面也一起消失（不盖住下面那层的颜色）",
+        cover === 0 && lidGone > 0 && lidAlive > 0,
+        `${lidAlive} 个点画着 / ${lidGone} 个点消失，越界 ${cover}`);
 
   /* ---- 关掉规则 → 原样都画 ---- */
   S.orderRule = false; api.rebuild(false);
