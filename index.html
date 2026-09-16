@@ -824,7 +824,9 @@ function buildStratum(k) {
 
   void NSq;
   const mmesh = mesh(pos,nrm,col,idx, sA, bandArr);
-  if (bandArr) mmesh._pal = true;      // 只有地表的顶面走调色板那条路
+  if (bandArr && !S.curv) mmesh._pal = true;   // 只有地表的顶面走调色板那条路
+  /* 但【曲率显示】打开时不能走调色板：那条路在片元里直接拿调色板的颜色，
+     会把地表面逐顶点算出来的曲率色带整个盖掉。曲率是连续场，本来就该插值。 */
   return mmesh;
 }
 /* 交界面本身也画出来（半透明薄面），带自己的颜色和透明度。

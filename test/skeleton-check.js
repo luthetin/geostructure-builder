@@ -445,6 +445,35 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         /vS\s*<\s*0\.0/.test(api.FS_SURF) && /discard/.test(api.FS_SURF));
 }
 
+/* ============================================================ I1b */
+console.log("\n─── I1b. 曲率显示不能被调色板盖掉 ───");
+{
+  /* 调色板那条路在片元里【直接取】露头带的颜色，会把地表面逐顶点算出来的
+     曲率色带整个盖掉（曲率是连续场，本来就该插值）。所以曲率打开时必须
+     退回逐顶点色。这里造一个穹隆，保证 K 到处都不为零，不是空跑。 */
+  reset([(x,y)=>900, (x,y)=>1500 - 0.00005*((x-2000)**2 + (y-2000)**2)]);
+  const lid0 = api.meshStrata[S.strata.length-1];
+  const flat = Array.from(lid0._col);
+  check("曲率关着时，地表面走调色板（颜色锐利）", lid0._pal === true);
+
+  S.curv = true; api.rebuild(false);
+  const lid1 = api.meshStrata[S.strata.length-1];
+  check("打开曲率显示后，地表面不再走调色板（否则曲率色带被盖掉）",
+        lid1._pal !== true);
+  let maxK = 0;
+  for (let q=0;q<SZ;q++) maxK = Math.max(maxK, Math.abs(S.ifaces[1].K[q]));
+  let dmax = 0;
+  for (let q=0;q<SZ;q++) for (let c=0;c<3;c++)
+    dmax = Math.max(dmax, Math.abs(lid1._col[q*4+c] - flat[q*4+c]));
+  check("曲率色带确实画在地表面上（顶点色与露头带色明显不同）",
+        maxK > 0 && dmax > 0.05,
+        `max|K| = ${maxK.toExponential(2)}，最大色差 ${dmax.toFixed(3)}`);
+
+  S.curv = false; api.rebuild(false);
+  check("关掉曲率后，地表面又走回调色板",
+        api.meshStrata[S.strata.length-1]._pal === true);
+}
+
 /* ============================================================ I2 */
 console.log("\n─── I2. 交界面薄面（有自己的颜色与透明度）───");
 {
