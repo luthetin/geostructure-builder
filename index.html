@@ -1494,10 +1494,11 @@ function rebuild(fit) {
   computeIfaceFields();
   computeStratumFields();
   meshStrata = S.strata.map((st, k) => st.vis ? buildStratum(k) : null);
-  /* 最上面那张交界面【不做薄面】：它就是地表那个盖子本身（永远画、颜色按露头带）。
-     多做一张只会以 1.5 m 的高度浮在盖子上方，把露头带的颜色盖住。 */
-  meshIfaces = S.ifaces.map((I, i) =>
-    (S.showIface && I.vis && i < S.ifaces.length-1) ? buildIfaceSurface(I) : null);
+  /* 每张交界面都做一张薄面（包括最上面那张）。
+     ⚠ 最上面那张薄面就是地表面本身、抬高 1.5 m 浮在地表盖子之上，
+     俯视时它永远在最前面 —— 所以【它的不透明度会直接影响露头带颜色能不能看见】：
+     想同时看到露头带，把这张界面的透明度调低。 */
+  meshIfaces = S.ifaces.map(I => (S.showIface && I.vis) ? buildIfaceSurface(I) : null);
   meshBase = S.showBase ? buildBase() : null;
   const A = S.ifaces[S.active];
   if (A) {

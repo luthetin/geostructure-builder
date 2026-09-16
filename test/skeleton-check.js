@@ -539,8 +539,8 @@ console.log("\n─── I2. 交界面薄面（有自己的颜色与透明度）
 {
   reset([(x,y)=>400, (x,y)=>700]);
   const list = api.meshIfaces.filter(Boolean);
-  check("每张交界面都有薄面网格，除了【最上面那张】—— 它就是地表那个盖子本身",
-        list.length === S.ifaces.length-1 && api.meshIfaces[S.ifaces.length-1] === null,
+  check("每张交界面都生成了薄面网格（包括最上面那张 —— 它就是地表面本身）",
+        list.length === S.ifaces.length && api.meshIfaces[S.ifaces.length-1] !== null,
         `${list.length} 个（界面共 ${S.ifaces.length} 个）`);
   const m = api.meshIfaces[0];
   check("薄面顶点数 = 网格点数", m._pos.length/3 === SZ, `${m._pos.length/3}`);
@@ -1312,5 +1312,6 @@ console.log("\n─── I5. 基底（底平面 ↔ 最下面那个界面之间�
   check("基底深度改成 900 m 后结论不变", bad2 === 0, `不符 ${bad2} 个顶点`);
   S.baseDepth = 250; api.rebuild(false);
 }
+
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);
