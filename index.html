@@ -59,6 +59,11 @@
   .l2 .opv{flex:0 0 26px;text-align:right;font-variant-numeric:tabular-nums}
   .l2 input[type=checkbox]{accent-color:var(--accent);margin:0}
   .ordlab{font-size:10.5px;color:#a99f8f}
+  .thk{font-size:10.5px;color:#a99f8f;flex:1;min-width:0}
+  /* 交界面行：夹在地层行之间，像地层柱上的分界线 */
+  .ifacerow{padding:5px 7px;margin:3px 0;border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line);background:#f6f4ef;font-size:11.5px}
+  .ifacerow.on{background:#f2e6d4;box-shadow:inset 0 0 0 1px var(--accent)}
   .ordhint{font-size:10px;color:#b3aa9c;letter-spacing:.5px;padding:1px 2px}
   .ordhint.top{margin-bottom:2px}
   .ordhint.bot{margin-top:2px}
@@ -81,9 +86,10 @@
     <fieldset>
       <legend>地层（层面）</legend>
       <div id="layerList"></div>
-      <div class="btns"><button id="bAddLayer">＋ 添加地层</button></div>
+      <div class="btns"><button id="bAddLayer">＋ 新建地层</button></div>
       <div class="note">
-        左侧圆钮 = 选中要编辑的层面。<b>沉积次序越高 = 位置越高</b>，新加的层自动放在最上面。
+        方块 = <b>地层</b>（两界面之间的形体），上下两行是它的<b>交界面</b>。<br>
+        圆钮 = 选中要编辑的交界面，拖它的控制点即可改变地层厚度与形态。
       </div>
     </fieldset>
 
@@ -122,14 +128,15 @@
       <label class="cb"><input type="checkbox" id="cFill"> 骨架面填充（低多边形）</label>
       <label class="cb"><input type="checkbox" id="cHandles" checked> 控制点手柄</label>
       <label class="cb"><input type="checkbox" id="cXray" checked> 骨架透视（穿透可见）</label>
-      <label class="cb"><input type="checkbox" id="cInter" checked> 层面交线</label>
+      <label class="cb"><input type="checkbox" id="cInter" checked> 交界面交线</label>
       <div class="row"><label>交线颜色</label>
         <input type="color" id="cInterColor" value="#db291a">
         <input type="range" id="cInterAlpha" min="0" max="1" step="0.05" value="1">
         <span class="ival" id="cInterAlpha_v">1.00</span></div>
+      <label class="cb"><input type="checkbox" id="cIface" checked> 显示交界面</label>
       <label class="cb"><input type="checkbox" id="cRule" checked> 沉积次序透明规则</label>
 
-      <label class="cb" style="margin-top:9px"><input type="checkbox" id="cContour" checked> 最高次序地层等高线</label>
+      <label class="cb" style="margin-top:9px"><input type="checkbox" id="cContour" checked> 地表等高线</label>
       <label class="cb"><input type="checkbox" id="cContourLabel" checked> 等高线标注高程数字</label>
       <div class="row"><label>等高距</label>
         <input type="range" id="cContourInt" min="20" max="400" step="10" value="100">
@@ -139,12 +146,14 @@
         <input type="range" id="cContourAlpha" min="0" max="1" step="0.05" value="0.9">
         <span class="ival" id="cContourAlpha_v">0.90</span></div>
       <div class="note" style="margin-top:4px">
-        等高线画在<b>沉积次序最高</b>的那个层面上，是层面自身的等值线（构造等高线 / 走向线），
+        等高线画在<b>地表</b>（最上面的交界面）上，是它自身的等值线（构造等高线 / 走向线），
         每点高程都等于标注高度。改等高距需要重算几何，改颜色不需要。
       </div>
       <div class="note" style="margin-top:4px">
-        规则：某处若有<b>次序更高</b>的层面压在下面，则该处<b>次序较低的层面变透明</b>，交线照常显示。<br>
-        层面与交线都参与<b>深度遮挡</b>：前面的挡住后面的。
+        某处若有<b>更高的交界面压在下面</b>，该处这个交界面就透明；
+        <b>夹着它的地层也跟着透明</b>，于是能直接看进内部 —— 相当于自动剖开一条地层剖面。<br>
+        把某个交界面的不透明度调低，它夹着的地层也会一起透掉。<br>
+        地层与交线都参与<b>深度遮挡</b>：前面的挡住后面的。
       </div>
     </fieldset>
 
@@ -157,8 +166,9 @@
       </div>
       <input type="file" id="fileIn" accept=".json,application/json" style="display:none">
       <div class="note">
-        保存为 <b>.json</b>，含每个层面的骨架高程、水平偏移、颜色、透明度、沉积次序与视角，
-        关掉浏览器也不会丢。导出图片会按当前画布分辨率出 PNG。
+        保存为 <b>.json</b>，含全部交界面的骨架高程，以及各地层的颜色、透明度、显隐与视角，
+        关掉浏览器也不会丢。导出图片会按当前画布分辨率出 PNG。<br>
+        旧版本（只有"层面"的）存档也能打开，会自动按次序转成交界面。
       </div>
     </fieldset>
 
@@ -221,9 +231,9 @@ const SZ = (NS + 1) * (NS + 1);
 const D2R = Math.PI / 180;
 
 const S = {
-  res: 9, layers: [], active: 0, surf: 'interp',
+  res: 9, ifaces: [], strata: [], active: 0, surf: 'interp',
   showWire: true, showFill: false, showHandles: true, xray: true,
-  inter: true, orderRule: true, curv: false, autoRotate: false,
+  inter: true, orderRule: true, showIface: true, curv: false, autoRotate: false,
   interColor: [0.86, 0.16, 0.10], interAlpha: 1,
   showContour: true, contourInt: 100, contourLabel: true,
   contourColor: [0.353, 0.239, 0.129], contourAlpha: 0.9,
@@ -385,7 +395,7 @@ function mesh(pos, nrm, col, idx, sArr) {
     col:B(new Float32Array(col),gl.ARRAY_BUFFER),
     sbuf:B(Sv,gl.ARRAY_BUFFER),
     idx: idx?B(new Uint16Array(idx),gl.ELEMENT_ARRAY_BUFFER):null,
-    n: idx?idx.length:P.length/3, _pos:P, _col:new Float32Array(col), _s:Sv };
+    n: idx?idx.length:P.length/3, _pos:P, _col:new Float32Array(col), _s:Sv, _nrm:Nn };
 }
 function dispose(m) {
   if (!m) return;
@@ -430,26 +440,56 @@ function drawPts(m, mvp, size) {
 /* ============================================================
    地层数据
    ============================================================ */
+/* ============================================================
+   地质模型
+   ------------------------------------------------------------
+   交界面 ifaces[0..n-1]：自下而上排好序，每个有自己的骨架（控制网）
+   地层   strata[0..n-2]：strata[k] 是 ifaces[k] 与 ifaces[k+1] 之间的形体
+
+   于是 n 个交界面给出 n−1 个地层 —— 这就是"两个交界面之间的层即为地层"。
+   颜色与透明度挂在【地层体】上，不再挂在面上。
+   地层画成实体（顶面 + 底面 + 四周侧壁），厚度才看得见。
+   ============================================================ */
 const lerp3 = (a,b,t) => [0,1,2].map(i => a[i] + (b[i]-a[i])*t);
-function mkLayer(name, order, rgb, alpha) {
-  return { name, order, color: rgb, alpha, vis: true,
+const STRATA_COLORS = [[200,169,110],[125,154,118],[159,182,196],[185,143,131],
+                       [216,193,121],[170,181,162],[140,160,190],[196,150,122]];
+
+function mkIface(name, rgb, alpha) {
+  return { name, color: rgb || [150,150,158], alpha: (alpha==null?1:alpha), vis: true,
            z:null, Z:null, NX:null, NY:null, NZ:null, K:null, S:null };
 }
-function addLayer(placeAbove) {
-  const N = S.res;
-  const L = mkLayer('层面 ' + (S.layers.length + 1),
-    S.layers.reduce((m,x) => Math.max(m, x.order), 0) + 1, [190,170,140], 0.5);
-  L.z = new Float32Array(N*N);
-  if (placeAbove && S.layers.length) {
-    const top = S.layers.reduce((a,b) => a.order >= b.order ? a : b);
-    for (let q = 0; q < N*N; q++) L.z[q] = top.z[q] + 260;   // 次序更高 → 放在最上面
-  }
-  S.layers.push(L);
-  return L;
+function mkStratum(name, rgb, alpha) {
+  return { name, color: rgb, alpha, vis: true, S:null };
 }
-function seedLayer(L, kind) {
+/* 新建地层：在最上面加一个交界面（地表层面），
+   它与原顶面之间就形成新的地层体。 */
+function addStratum() {
+  const N = S.res, nI = S.ifaces.length;
+  const I = mkIface('交界面 ' + (nI + 1));
+  I.z = new Float32Array(N*N);
+  const top = S.ifaces[nI-1];
+  if (top) for (let q=0;q<N*N;q++) I.z[q] = top.z[q] + 220;
+  else     I.z.fill(600);
+  S.ifaces.push(I);
+  const k = S.strata.length;
+  S.strata.push(mkStratum('地层 ' + (k+1), STRATA_COLORS[k % STRATA_COLORS.length], 0.75));
+  S.active = S.ifaces.length - 1;
+  return I;
+}
+/* 删除地层 k：去掉它的【上】交界面，让它与上面的地层并成一个
+   （若 k 已是最上面那层，则等于去掉顶面，下面的地层向上接替）。
+   两种情形都是同一个操作，不必分支。 */
+function delStratum(k) {
+  if (S.strata.length <= 1) return false;
+  S.ifaces.splice(k+1, 1);
+  S.strata.splice(k, 1);
+  S.active = Math.max(0, Math.min(S.active, S.ifaces.length - 1));
+  return true;
+}
+function seedIface(I, kind) {
   const N = S.res, Lm = mapL();
-  L.z = new Float32Array(N*N);
+  I.z = new Float32Array(N*N);
+  const base = S.ifaces.indexOf(I) * 220;
   for (let j=0;j<N;j++) for (let i=0;i<N;i++) {
     const x=i*SPACING, y=j*SPACING, q=j*N+i;
     let z = 600;
@@ -459,24 +499,24 @@ function seedLayer(L, kind) {
                                     + 110*Math.sin((x+y)/523+0.4) + 70*Math.cos((x*1.7-y)/389);
     else if (kind === 'flat')   z = 600;
     else if (kind === 'rand')   z = 600 + (Math.random()-0.5)*520;
-    L.z[q] = z;
+    I.z[q] = z + base;
   }
 }
-function relaxLayer(L) {
-  const N = S.res, o = L.z.slice();
+function relaxIface(I) {
+  const N = S.res, o = I.z.slice();
   for (let j=1;j<N-1;j++) for (let i=1;i<N-1;i++) {
-    const q=j*N+i; L.z[q] = (o[q-N]+o[q+N]+o[q-1]+o[q+1])/4;
+    const q=j*N+i; I.z[q] = (o[q-N]+o[q+N]+o[q-1]+o[q+1])/4;
   }
 }
 function resampleAll(newRes) {
   const M = mat(), old = S.res, oldZ = old*old;
-  for (const L of S.layers) {
-    if (!L.z || L.z.length !== oldZ) continue;
+  for (const I of S.ifaces) {
+    if (!I.z || I.z.length !== oldZ) continue;
     S.res = old;                                  // 先用旧网求值
     const z = new Float32Array(newRes*newRes);
     for (let j=0;j<newRes;j++) for (let i=0;i<newRes;i++)
-      z[j*newRes+i] = evalSurf(L, i*SPACING, j*SPACING, M).z;
-    L.z = z;
+      z[j*newRes+i] = evalSurf(I, i*SPACING, j*SPACING, M).z;
+    I.z = z;
   }
   S.res = newRes;
 }
@@ -484,68 +524,153 @@ function resampleAll(newRes) {
 /* ============================================================
    求值 → 次序规则 → 几何
    ============================================================ */
-function evalLayer(L) {
+function evalIface(I) {
   const Lm = mapL(), M = mat();
-  L.Z=new Float32Array(SZ); L.NX=new Float32Array(SZ); L.NY=new Float32Array(SZ);
-  L.NZ=new Float32Array(SZ); L.K=new Float32Array(SZ);
+  I.Z=new Float32Array(SZ); I.NX=new Float32Array(SZ); I.NY=new Float32Array(SZ);
+  I.NZ=new Float32Array(SZ); I.K=new Float32Array(SZ);
   for (let b=0;b<=NS;b++) for (let a=0;a<=NS;a++) {
-    const s = evalSurf(L, Lm*a/NS, Lm*b/NS, M), q = b*(NS+1)+a;
-    L.Z[q]=s.z; L.NX[q]=s.nx; L.NY[q]=s.ny; L.NZ[q]=s.nz; L.K[q]=s.K;
+    const s = evalSurf(I, Lm*a/NS, Lm*b/NS, M), q = b*(NS+1)+a;
+    I.Z[q]=s.z; I.NX[q]=s.nx; I.NY[q]=s.ny; I.NZ[q]=s.nz; I.K[q]=s.K;
   }
 }
-/* 沉积次序规则：给每个层面算一个【连续的有符号场】S。
-   S[q] = 本层与所有更高次序层面的最小高差。S < 0 表示有更高次序的层面压在下面。
-   用连续场（而不是逐顶点 0/1 透明度）才能让透明边界精确落在两面的交线上。 */
-function computeAlpha() {
-  for (const L of S.layers) {
-    if (!L.S || L.S.length !== SZ) L.S = new Float32Array(SZ);
-    L.S.fill(1e9);
+/* 沉积次序透明规则（沿用最初的设计）：
+   交界面 i 在 (x,y) 处【透明】⟺ 存在比它高的交界面 j 在该处比它低（z_j < z_i）。
+
+   用【连续有符号场】而不是逐顶点 0/1 开关：
+     S_i(x,y) = min over j>i of ( z_j − z_i )
+   S < 0 说明有更高的界面压在它下面 —— 叠置反了。
+   片元在场上过零处丢弃，透明边界就精确落在两个交界面的交线上。 */
+function computeIfaceFields() {
+  const n = S.ifaces.length;
+  for (const I of S.ifaces) {
+    if (!I.S || I.S.length !== SZ) I.S = new Float32Array(SZ);
+    I.S.fill(1e9);
   }
   if (!S.orderRule) return;
-  for (const L of S.layers) {
-    for (const U of S.layers) {
-      if (U === L || U.order <= L.order) continue;      // 只看次序更高的层面
-      const s = L.S, uz = U.Z, lz = L.Z;
-      for (let q = 0; q < SZ; q++) {
-        const d = uz[q] - lz[q];
-        if (d < s[q]) s[q] = d;
+  for (let i=0;i<n;i++) {
+    const si = S.ifaces[i].S, zi = S.ifaces[i].Z;
+    for (let j=i+1;j<n;j++) {
+      const zj = S.ifaces[j].Z;
+      for (let q=0;q<SZ;q++) {
+        const d = zj[q] - zi[q];
+        if (d < si[q]) si[q] = d;
       }
     }
   }
 }
-function buildLayerSurface(L) {
-  const Lm = mapL();
+/* 地层的透明场 = 上下两个界面的场的【较小者】：
+   夹着它的任一个界面在该处透明，这个地层就在该处一起透明 ——
+   于是能直接看进内部，就是一条天然的地层剖面。 */
+function computeStratumFields() {
+  for (let k=0;k<S.strata.length;k++) {
+    const st = S.strata[k];
+    if (!st.S || st.S.length !== SZ) st.S = new Float32Array(SZ);
+    const a = S.ifaces[k].S, b = S.ifaces[k+1].S, s = st.S;
+    for (let q=0;q<SZ;q++) s[q] = a[q] < b[q] ? a[q] : b[q];
+  }
+}
+/* 地层自身的不透明度上限还受两个界面牵制：
+   把界面不透明度调到 0，它夹着的地层就一起透掉。 */
+function stratumAlpha(k) {
+  const st = S.strata[k];
+  return Math.min(st.alpha, S.ifaces[k].alpha, S.ifaces[k+1].alpha);
+}
+/* 把一个地层建成实体：顶面 + 底面 + 四周侧壁。
+   绕序一律朝外，渲染时先画背面再画正面（配合剔除），半透明才有正确层次。 */
+function buildStratum(k) {
+  const st = S.strata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
+  const Lm = mapL(), n = NS+1, NSq = NS*NS;
+  const pos=[], nrm=[], col=[], idx=[], sA=[];
+  const base = st.color.map(v=>v/255);
   let kref = 1e-12;
   if (S.curv) {
-    const av = []; for (let q=0;q<SZ;q++) av.push(Math.abs(L.K[q]));
+    const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
     av.sort((p,r)=>p-r); kref = Math.max(av[Math.floor(SZ*0.9)], 1e-12);
   }
-  let zl=Infinity, zh=-Infinity;
-  for (let q=0;q<SZ;q++){ if(L.Z[q]<zl)zl=L.Z[q]; if(L.Z[q]>zh)zh=L.Z[q]; }
-  const span = Math.max(1, zh-zl);
-  const pos=[],nrm=[],col=[],idx=[];
-  for (let q=0;q<SZ;q++) {
-    const b=(q/(NS+1))|0, a=q%(NS+1);
-    pos.push(Lm*a/NS, Lm*b/NS, L.Z[q]);
-    nrm.push(L.NX[q], L.NY[q], L.NZ[q]);
-    let c;
-    if (S.curv) {
-      const K=L.K[q], t=Math.sign(K)*Math.sqrt(Math.min(1,Math.abs(K)/kref));
-      c = t>=0 ? lerp3([0.85,0.85,0.82],[0.78,0.30,0.18],t)
-               : lerp3([0.85,0.85,0.82],[0.20,0.42,0.72],-t);
-    } else c = L.color.map(v=>v/255);
-    col.push(c[0], c[1], c[2], 1);
+  const capColor = (K) => {
+    if (!S.curv) return base;
+    const t = Math.sign(K)*Math.sqrt(Math.min(1,Math.abs(K)/kref));
+    return t>=0 ? lerp3([0.85,0.85,0.82],[0.78,0.30,0.18],t)
+                : lerp3([0.85,0.85,0.82],[0.20,0.42,0.72],-t);
+  };
+
+  /* ---- 顶面：法线朝上，从上方看是逆时针 ---- */
+  for (let b=0;b<n;b++) for (let a=0;a<n;a++) {
+    const q=b*n+a, c = capColor(top.K[q]);
+    pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
+    nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
+    col.push(c[0],c[1],c[2],1);
+    sA.push(st.S[q]);
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
-    const p0=b*(NS+1)+a, p1=p0+1, p2=p0+NS+1, p3=p2+1;
-    idx.push(p0,p2,p1,p1,p2,p3);
+    const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
+    idx.push(p0,p1,p2);  idx.push(p1,p3,p2);
   }
-  return mesh(pos,nrm,col,idx, L.S);
+
+  /* ---- 底面：法线朝下，绕序相反 ---- */
+  const botBase = pos.length/3;
+  for (let b=0;b<n;b++) for (let a=0;a<n;a++) {
+    const q=b*n+a, c = capColor(bot.K[q]);
+    pos.push(Lm*a/NS, Lm*b/NS, bot.Z[q]);
+    nrm.push(-bot.NX[q], -bot.NY[q], -bot.NZ[q]);
+    col.push(c[0],c[1],c[2],1);
+    sA.push(st.S[q]);
+  }
+  for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
+    const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
+    idx.push(botBase+p0, botBase+p2, botBase+p1);
+    idx.push(botBase+p1, botBase+p2, botBase+p3);
+  }
+
+  /* ---- 四周侧壁：法线朝外。这是"厚度看得见"的关键 ---- */
+  const wall = (list, nx, ny) => {
+    for (let t=0;t<list.length-1;t++) {
+      const q1 = list[t], q2 = list[t+1];
+      const x1=Lm*(q1%n)/NS, y1=Lm*((q1/n)|0)/NS;
+      const x2=Lm*(q2%n)/NS, y2=Lm*((q2/n)|0)/NS;
+      const zb1=bot.Z[q1], zb2=bot.Z[q2], zt1=top.Z[q1], zt2=top.Z[q2];
+      const at = pos.length/3;
+      pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
+      pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
+      const th = [st.S[q1], st.S[q2], st.S[q2], st.S[q1], st.S[q2], st.S[q1]];
+      for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
+      for (let u=0;u<6;u++) idx.push(at+u);
+    }
+  };
+  const south=[], north=[], west=[], east=[];
+  for (let a=0;a<n;a++) { south.push(a);            north.push((n-1)*n+a); }
+  for (let b=0;b<n;b++) { west.push(b*n);           east.push(b*n+(n-1)); }
+  wall(south, 0, -1);                       // y=0 边，x 递增 → 法线朝 −y
+  wall(north.slice().reverse(), 0, 1);      // y=L 边，x 递减 → 法线朝 +y
+  wall(west.slice().reverse(), -1, 0);      // x=0 边，y 递减 → 法线朝 −x
+  wall(east, 1, 0);                         // x=L 边，y 递增 → 法线朝 +x
+
+  void NSq;
+  return mesh(pos,nrm,col,idx, sA);
+}
+/* 交界面本身也画出来（半透明薄面），带自己的颜色和透明度。
+   沿法线抬高 1.5 m，免得和地层的顶/底面打架（z-fighting）。 */
+function buildIfaceSurface(I) {
+  const Lm = mapL(), n = NS+1;
+  const pos=[], nrm=[], col=[], idx=[], sA=[];
+  const base = I.color.map(v=>v/255);
+  for (let b=0;b<n;b++) for (let a=0;a<n;a++) {
+    const q=b*n+a;
+    pos.push(Lm*a/NS + I.NX[q]*1.5, Lm*b/NS + I.NY[q]*1.5, I.Z[q] + I.NZ[q]*1.5);
+    nrm.push(I.NX[q], I.NY[q], I.NZ[q]);
+    col.push(base[0],base[1],base[2],1);
+    sA.push(I.S[q]);
+  }
+  for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
+    const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
+    idx.push(p0,p1,p2); idx.push(p1,p3,p2);
+  }
+  return mesh(pos,nrm,col,idx, sA);
 }
 function buildSkeletonOf(L) {
   const N = S.res;
   const P = (i,j) => [i*SPACING, j*SPACING, L.z[j*N+i]];
-  const dn = L.color.map(v => Math.round(v*0.30));
+  const dn = [70, 78, 92];        // 骨架线颜色（交界面本身不再有颜色）
   const wc3 = [dn[0]/255, dn[1]/255, dn[2]/255];
 
   const wp=[]; const push=(p,q)=>{ wp.push(p[0],p[1],p[2], q[0],q[1],q[2]); };
@@ -729,10 +854,10 @@ function emitRibbon(polys, NXg, NYg, NZg, hw, ZA, ZB, gapTest, pos, nrm, col) {
 
 function buildIntersections() {
   const out = [];
-  const vis = S.layers.filter(L => L.vis);
+  const IFS = S.ifaces;
   const F = new Float32Array(SZ);
-  for (let i=0;i<vis.length;i++) for (let j=i+1;j<vis.length;j++) {
-    const A = vis[i], B = vis[j];
+  for (let i=0;i<IFS.length;i++) for (let j=i+1;j<IFS.length;j++) {
+    const A = IFS[i], B = IFS[j];
     for (let q=0;q<SZ;q++) F[q] = A.Z[q] - B.Z[q];
     const polys = stitchContours(F);
     if (!polys.length) continue;
@@ -743,11 +868,9 @@ function buildIntersections() {
   return out;
 }
 
-/* 沉积次序最高的（可见）层面 */
-function topLayer() {
-  let best = null;
-  for (const L of S.layers) if (L.vis && (!best || L.order > best.order)) best = L;
-  return best;
+/* 最上面那个交界面 = 地表。等高线与平面图都画在它上面。 */
+function topIface() {
+  return S.ifaces.length ? S.ifaces[S.ifaces.length - 1] : null;
 }
 /* 最高次序层面上的等高线（构造等高线） */
 let contourInfo = { name:'', interval:0, levels:0, segs:0, cut:0,
@@ -791,7 +914,7 @@ function buildContours() {
                   cutLevels:0, labelLevels:0 };
   contourAnchors = [];
   if (!S.showContour) return [];
-  const L = topLayer();
+  const L = topIface();
   if (!L || !L.Z) return [];
   let lo = Infinity, hi = -Infinity;
   for (let q=0;q<SZ;q++) { if (L.Z[q]<lo) lo=L.Z[q]; if (L.Z[q]>hi) hi=L.Z[q]; }
@@ -877,7 +1000,7 @@ function drawMap() {
   if (map2d.width !== side) { map2d.width = side; map2d.height = side; }
   const W = map2d.width, H = map2d.height;
   mctx.setTransform(1,0,0,1,0,0);
-  const L = topLayer();
+  const L = topIface();
   if (!L || !L.Z) {
     mctx.fillStyle = '#eeeee9'; mctx.fillRect(0,0,W,H);
     mapState = { name:'', lo:0, hi:0 };
@@ -897,7 +1020,8 @@ function drawMap() {
     const p = (r*n+i)*4;
     let c;
     if (S.mapMode === 'gray')      { const g = Math.round(24 + 226*t); c = [g,g,g]; }
-    else if (S.mapMode === 'user') c = L.color;
+    else if (S.mapMode === 'user' && S.strata.length)
+      c = S.strata[S.strata.length-1].color;      // 用最上面那个地层的颜色
     else                           c = rampRGB(t);
     d[p]=c[0]; d[p+1]=c[1]; d[p+2]=c[2]; d[p+3]=255;
   }
@@ -969,7 +1093,7 @@ function drawMap() {
   /* 交线：各可见层面两两求交，投影到平面上（同样用平滑折线，不是逐格小段） */
   mapInterSegs = 0;
   if (S.mapInter) {
-    const vis = S.layers.filter(x => x.vis);
+    const vis = S.ifaces;
     const sc = W / mapL();
     const F = new Float32Array(SZ);
     mctx.strokeStyle = rgbaOf(S.interColor, Math.max(0.25, S.interAlpha));
@@ -997,7 +1121,7 @@ function drawMap() {
   mctx.fillText('N ↑', W - 6*dpr, 16*dpr);
 
   document.getElementById('mapInfo').innerHTML =
-    `${L.name}（次序 ${L.order}）<br>高程 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m` +
+    `${L.name}（地表）<br>高程 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m` +
     (S.mapContour ? `　等高距 ${S.contourInt} m` : '') +
     (S.mapInter && mapInterSegs ? `<br>交线 ${mapInterSegs} 段` : '');
 }
@@ -1047,26 +1171,29 @@ function updateLabels(MVP) {
    重建
    ============================================================ */
 let selSet = new Set();          // 被 Shift 选中的控制点下标
-let meshSurf = [], meshWire = null, meshFill = null, meshHandles = null,
+let meshStrata = [], meshIfaces = [], meshWire = null, meshFill = null, meshHandles = null,
     meshSel = null, meshInter = [], meshContour = [];
 let camInit = false;
 
 function zRange() {
   let lo=Infinity, hi=-Infinity;
-  for (const L of S.layers) if (L.z) for (let k=0;k<L.z.length;k++) {
-    if (L.z[k]<lo) lo=L.z[k]; if (L.z[k]>hi) hi=L.z[k]; }
+  for (const I of S.ifaces) if (I.z) for (let k=0;k<I.z.length;k++) {
+    if (I.z[k]<lo) lo=I.z[k]; if (I.z[k]>hi) hi=I.z[k]; }
   if (!isFinite(lo)) { lo=0; hi=1000; }
   return [lo,hi];
 }
 function rebuild(fit) {
   dispose(meshWire); dispose(meshFill); dispose(meshHandles); dispose(meshSel);
-  for (const m of meshSurf) dispose(m);
+  for (const m of meshStrata) dispose(m);
+  for (const m of meshIfaces) dispose(m);
   for (const m of meshInter) dispose(m);
   for (const m of meshContour) dispose(m);
-  for (const L of S.layers) evalLayer(L);
-  computeAlpha();
-  meshSurf = S.layers.map(L => L.vis ? buildLayerSurface(L) : null);
-  const A = S.layers[S.active];
+  for (const I of S.ifaces) evalIface(I);
+  computeIfaceFields();
+  computeStratumFields();
+  meshStrata = S.strata.map((st, k) => st.vis ? buildStratum(k) : null);
+  meshIfaces = S.ifaces.map(I => (S.showIface && I.vis) ? buildIfaceSurface(I) : null);
+  const A = S.ifaces[S.active];
   if (A) {
     const g = buildSkeletonOf(A);
     meshWire=g.wire; meshFill=g.fill; meshHandles=g.handles; meshSel=g.sel;
@@ -1103,11 +1230,11 @@ function project(p, MVP) {
   return [(x/k*0.5+0.5)*w, (0.5-y/k*0.5)*h];
 }
 function activeCtrl(i,j) {
-  const N=S.res, L=S.layers[S.active];
+  const N=S.res, L=S.ifaces[S.active];
   return [i*SPACING, j*SPACING, L.z[j*N+i]];
 }
 function pick(mx,my) {
-  if (!S.layers[S.active]) return -1;
+  if (!S.ifaces[S.active]) return -1;
   const MVP=camMVP(), N=S.res; let best=-1, bd=17*17;
   for (let j=0;j<N;j++) for (let i=0;i<N;i++) {
     const s=project(activeCtrl(i,j),MVP); if(!s) continue;
@@ -1161,7 +1288,7 @@ window.addEventListener('mousemove', e => {
     }
     return;
   }
-  const L = S.layers[S.active];
+  const L = S.ifaces[S.active];
   if (!L) { mode=null; return; }
 
   if (mode==='orbit') {
@@ -1223,28 +1350,48 @@ function render() {
   const MVP = camMVP(), eye = camEye();
 
   const list = [];
-  for (let i=0;i<S.layers.length;i++) {
-    const L = S.layers[i];
-    if (!L.vis || !meshSurf[i]) continue;
-    // 排序键：图幅中心、该层平均高程到相机的距离。层面是同一域上的高度场，
-    // 这样做出来的远近次序足够准，也不像质心那样容易算错。
+  for (let k=0;k<S.strata.length;k++) {
+    const st = S.strata[k];
+    if (!st.vis || !meshStrata[k]) continue;
+    // 排序键：图幅中心、该地层平均高程到相机的距离。
+    // 地层是同一域上的高度场，这个远近次序足够准。
     let cz = 0, n = 0;
-    for (let q = 0; q < SZ; q += 23) { cz += L.Z[q]; n++; }
-    const mx = mapL()/2, my = mapL()/2, mz = cz / n;
-    list.push({ L, m: meshSurf[i],
+    for (let q = 0; q < SZ; q += 23) { cz += st.S[q]; n++; }
+    const mid = (S.ifaces[k].Z[Math.floor(SZ/2)] + S.ifaces[k+1].Z[Math.floor(SZ/2)]) / 2;
+    const mz = mid + 0;
+    const mx = mapL()/2, my = mapL()/2;
+    list.push({ k, st, m: meshStrata[k],
       d: (mx-eye[0])**2 + (my-eye[1])**2 + (mz-eye[2])**2 });
+    void cz; void n;
   }
   list.sort((a,b) => b.d - a.d);              // 半透明混合必须从远到近画
 
-  /* 层面【写深度】：这是"先后遮挡"的关键 —— 近的层面挡住远的。
-     配合片元着色器里对全透明片元的 discard，被次序规则变透明的部分
-     不写深度，于是它下面的更高次序层面就能透出来。 */
+  /* 地层实体：每个地层分两趟画 —— 先背面、后正面，配合剔除。
+     这样半透明地层的内部层次才是对的（先看到内壁，再看到外壁）。
+     深度写入开着，近处的地层才能正确挡住远处的。 */
   gl.enable(gl.DEPTH_TEST);
   gl.depthMask(true);
-  for (const o of list) drawSurf(o.m, MVP, 0.52, 0.60, o.L.alpha, true);
+  gl.enable(gl.CULL_FACE);
+  for (const o of list) {
+    const a = stratumAlpha(o.k);
+    gl.cullFace(gl.FRONT);
+    drawSurf(o.m, MVP, 0.52, 0.60, a, true);
+    gl.cullFace(gl.BACK);
+    drawSurf(o.m, MVP, 0.52, 0.60, a, true);
+  }
+  gl.disable(gl.CULL_FACE);
 
-  /* 交线 + 最高次序层面的等高线：都在关掉深度测试【之前】画，
-     才能真正被前面的层面遮住 */
+  /* 交界面本身也画一层半透明薄面（有自己的颜色与透明度）。
+     不写深度，只做叠加，免得盖住地层实体。 */
+  gl.depthMask(false);
+  for (let i=0;i<meshIfaces.length;i++) {
+    const m = meshIfaces[i];
+    if (m) drawSurf(m, MVP, 0.55, 0.55, S.ifaces[i].alpha, true);
+  }
+  gl.depthMask(true);
+
+  /* 交线 + 地表的等高线：都在关掉深度测试【之前】画，
+     才能真正被前面的地层遮住 */
   for (const m of meshInter)
     drawGeom(m, MVP, 1.0, 0.0, S.interAlpha, false, gl.TRIANGLES, S.interColor);
   for (const m of meshContour)
@@ -1267,121 +1414,152 @@ function render() {
    界面
    ============================================================ */
 function setInfo() {
-  const [lo,hi] = zRange(), A = S.layers[S.active];
-  let s = `共 <b>${S.layers.length}</b> 个层面　控制网 <b>${S.res}×${S.res}</b>　` +
-          `图幅 <b>${(mapL()/1000).toFixed(1)} km</b><br>高程范围 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m`;
-  if (A) s += `<br>编辑中：<b>${A.name}</b>（次序 <b>${A.order}</b>，不透明度 ${A.alpha.toFixed(2)}）`;  if (selSet.size && A) {
+  const [lo,hi] = zRange(), A = S.ifaces[S.active];
+  let s = `<b>${S.strata.length}</b> 个地层　<b>${S.ifaces.length}</b> 个交界面　` +
+          `控制网 <b>${S.res}×${S.res}</b>　图幅 <b>${(mapL()/1000).toFixed(1)} km</b><br>` +
+          `高程范围 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m`;
+  if (A) s += `<br>编辑中的交界面：<b>${A.name}</b>　（共 ${S.ifaces.length} 个，自下而上编号）`;
+  if (selSet.size && A) {
     const one = selSet.size === 1;
     const k = [...selSet][0];
     s += `<br>已选中 <b>${selSet.size}</b> 个控制点` +
          (one ? `（(${k%S.res}, ${(k/S.res)|0}) = <b>${A.z[k].toFixed(0)} m</b>）` : '') +
          `　拖动其中任一个即可一起升降`;
   }
-  if (S.orderRule) {
-    let hid = 0;
-    for (const L of S.layers) if (L.S) for (let q=0;q<SZ;q++) if (L.S[q] < 0) hid++;
-    s += `<br>次序规则：<b>${hid ? '已触发（' + (hid/(SZ*S.layers.length)*100).toFixed(0) + '% 的层面面积被压在下方的更高次序层面顶掉）' : '未触发（叠置正常）'}</b>`;
-  }
+  let trans = 0, tot = 0;
+  for (const st of S.strata) if (st.S) for (let q=0;q<SZ;q++) { tot++; if (st.S[q] < 0) trans++; }
+  s += `<br>次序规则：<b>${trans
+      ? '已触发（有 ' + (trans/tot*100).toFixed(0) + '% 的地层体积因此透明）'
+      : '未触发（叠置正常）'}</b>`;
   if (S.showContour) {
-    if (!contourInfo.name) s += `<br>等高线：当前没有可见层面`;
+    if (!contourInfo.name) s += `<br>等高线：当前没有交界面`;
     else if (!contourInfo.levels)
       s += `<br>等高线：<b>${contourInfo.name}</b> 在此等高距下没有可画的等高线` +
-           `（层面是水平面、或高差小于等高距 ${contourInfo.interval} m —— 水平面上等高线是退化的）`;
+           `（地表是水平面、或高差小于等高距 ${contourInfo.interval} m —— 水平面上等高线是退化的）`;
     else
-      s += `<br>等高线：画在 <b>${contourInfo.name}</b> 上，等高距 <b>${contourInfo.interval} m</b>，共 <b>${contourInfo.levels}</b> 条`;
+      s += `<br>等高线：画在地表 <b>${contourInfo.name}</b> 上，等高距 <b>${contourInfo.interval} m</b>，共 <b>${contourInfo.levels}</b> 条`;
   }
   document.getElementById('info').innerHTML = s;
   updateSensNote();
 }
-function computeAlphaAll() {
-  computeAlpha();
-  for (let i=0;i<S.layers.length;i++) {
-    const m = meshSurf[i]; if (!m || !m._s) continue;
-    m._s.set(S.layers[i].S);
-    gl.bindBuffer(gl.ARRAY_BUFFER, m.sbuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, m._s);
-  }
-}
 function hexOf(c){ return '#' + c.map(v=>Math.max(0,Math.min(255,v|0)).toString(16).padStart(2,'0')).join(''); }
+const meanZ = (I) => { if (!I.Z) return NaN; let s=0; for (let q=0;q<SZ;q++) s+=I.Z[q]; return s/SZ; };
+const stratumThick = (k) => {
+  const tp = S.ifaces[k+1].Z, bt = S.ifaces[k].Z;
+  if (!tp || !bt) return NaN;
+  let s=0; for (let q=0;q<SZ;q++) s += tp[q] - bt[q]; return s/SZ;
+};
 
-/* 列表按真正的层序排列：下老上新。
-   排序键是沉积次序（降序），所以列表最上面 = 次序最高 = 最新，
-   最下面 = 次序最低 = 最老 —— 就是地层柱的画法。 */
-function sortedLayers() {
-  return S.layers.map((L, i) => ({ L, i }))
-    .sort((a, b) => (b.L.order - a.L.order) || (a.i - b.i));
-}
-function buildLayerList() {
+/* 列出地层柱：自上而下 = 最新 → 最老。
+   每一层是一个【地层】（颜色/透明度/显隐/删除），地层之间是【交界面】；
+   点交界面的圆钮就选中它，骨架随之显示、可以拖控制点。 */
+function buildStratumList() {
   const box = document.getElementById('layerList');
   box.innerHTML = '';
 
   const head = document.createElement('div');
   head.className = 'ordhint top';
-  head.textContent = '▲ 新（沉积次序高）';
+  head.textContent = '▲ 新';
   box.appendChild(head);
 
-  sortedLayers().forEach(({ L, i }) => {
+  const ifaceRow = (i) => {
+    const I = S.ifaces[i];
     const d = document.createElement('div');
-    d.className = 'layer' + (i===S.active ? ' on' : '');
+    d.className = 'ifacerow' + (i===S.active ? ' on' : '');
+    const mz = meanZ(I);
     d.innerHTML =
       '<div class="l1">' +
-        `<input type="radio" name="actL" ${i===S.active?'checked':''}>` +
-        `<input type="color" value="${hexOf(L.color)}">` +
-        `<input type="text" value="${L.name.replace(/"/g,'&quot;')}">` +
-        '<span class="ordlab">次序</span>' +
-        `<input type="number" class="ord" min="1" max="99" value="${L.order}">` +
-        '<button class="del" title="删除">✕</button>' +
+        `<input type="radio" name="actI" ${i===S.active?'checked':''}>` +
+        `<input type="color" value="${hexOf(I.color)}">` +
+        `<input type="text" value="${I.name.replace(/"/g,'&quot;')}">` +
+        `<span class="ordlab">${isNaN(mz) ? '' : Math.round(mz) + ' m'}</span>` +
+        `<input type="checkbox" ${I.vis?'checked':''} title="显示">` +
       '</div>' +
       '<div class="l2">不透明' +
-        `<input type="range" min="0" max="1" step="0.05" value="${L.alpha}">` +
-        `<span class="opv">${L.alpha.toFixed(2)}</span>` +
-        `<input type="checkbox" ${L.vis?'checked':''} title="显示">` +
+        `<input type="range" min="0" max="1" step="0.05" value="${I.alpha}">` +
+        `<span class="opv">${I.alpha.toFixed(2)}</span>` +
       '</div>';
-    const rad = d.querySelector('input[type=radio]');
     const col = d.querySelector('input[type=color]');
     const nm  = d.querySelector('input[type=text]');
-    const ord = d.querySelector('input.ord');
     const op  = d.querySelector('input[type=range]');
     const vis = d.querySelector('input[type=checkbox]');
-    rad.addEventListener('change', () => { S.active=i; selSet.clear(); buildLayerList(); rebuild(false); render(); setInfo(); });
+    d.querySelector('input[type=radio]').addEventListener('change', () => {
+      S.active = i; selSet.clear(); buildStratumList(); rebuild(false); render(); setInfo();
+    });
     col.addEventListener('input', () => {
-      L.color = [1,3,5].map(k => parseInt(col.value.substr(k,2),16));
+      I.color = [1,3,5].map(k2 => parseInt(col.value.substr(k2,2),16));
       rebuild(false); render();
     });
-    nm.addEventListener('input', () => { L.name = nm.value; setInfo(); });
-    ord.addEventListener('input', () => {
-      L.order = Math.max(1, Math.min(99, +ord.value || 1));
-      computeAlphaAll(); render(); setInfo();      // 次序只改透明度，不必重建几何
-    });
-    ord.addEventListener('change', () => buildLayerList());   // 离焦后再重排，免得打断输入
+    nm.addEventListener('input', () => { I.name = nm.value; });
     op.addEventListener('input', () => {
-      L.alpha = +op.value;
-      d.querySelector('.opv').textContent = L.alpha.toFixed(2);
+      I.alpha = +op.value;
+      d.querySelector('.opv').textContent = I.alpha.toFixed(2);
+      rebuild(false); render(); setInfo();     // 界面的不透明度会牵动它夹着的地层
+    });
+    vis.addEventListener('change', () => { I.vis = vis.checked; rebuild(false); render(); });
+    return d;
+  };
+
+  const stratumRow = (k) => {
+    const st = S.strata[k];
+    const d = document.createElement('div');
+    d.className = 'layer';
+    const th = stratumThick(k);
+    d.innerHTML =
+      '<div class="l1">' +
+        `<input type="color" value="${hexOf(st.color)}">` +
+        `<input type="text" value="${st.name.replace(/"/g,'&quot;')}">` +
+        `<span class="ordlab">均厚</span>` +
+        `<span class="thk">${isNaN(th) ? '—' : Math.round(th) + ' m'}</span>` +
+        '<button class="del" title="删除这个地层">✕</button>' +
+      '</div>' +
+      '<div class="l2">不透明' +
+        `<input type="range" min="0" max="1" step="0.05" value="${st.alpha}">` +
+        `<span class="opv">${st.alpha.toFixed(2)}</span>` +
+        `<input type="checkbox" ${st.vis?'checked':''} title="显示">` +
+      '</div>';
+    const col = d.querySelector('input[type=color]');
+    const nm  = d.querySelector('input[type=text]');
+    const op  = d.querySelector('input[type=range]');
+    const vis = d.querySelector('input[type=checkbox]');
+    col.addEventListener('input', () => {
+      st.color = [1,3,5].map(k2 => parseInt(col.value.substr(k2,2),16));
+      rebuild(false); render();
+    });
+    nm.addEventListener('input', () => { st.name = nm.value; });
+    op.addEventListener('input', () => {
+      st.alpha = +op.value;
+      d.querySelector('.opv').textContent = st.alpha.toFixed(2);
       render(); setInfo();
     });
-    vis.addEventListener('change', () => { L.vis = vis.checked; rebuild(false); render(); setInfo(); });
+    vis.addEventListener('change', () => { st.vis = vis.checked; rebuild(false); render(); setInfo(); });
     d.querySelector('.del').addEventListener('click', () => {
-      if (S.layers.length <= 1) return;
-      S.layers.splice(i,1);
-      S.active = Math.max(0, Math.min(S.layers.length-1, S.active > i ? S.active-1 : S.active));
-      selSet.clear(); buildLayerList(); rebuild(true); render(); setInfo();
+      if (!delStratum(k)) return;
+      selSet.clear(); buildStratumList(); rebuild(true); render(); setInfo();
     });
-    box.appendChild(d);
-  });
+    return d;
+  };
+
+  for (let k = S.strata.length - 1; k >= 0; k--) {
+    box.appendChild(ifaceRow(k+1));      // 这个地层的上界面
+    box.appendChild(stratumRow(k));      // 地层体
+  }
+  box.appendChild(ifaceRow(0));          // 最底下的交界面
 
   const foot = document.createElement('div');
   foot.className = 'ordhint bot';
-  foot.textContent = '▼ 老（沉积次序低）';
+  foot.textContent = '▼ 老（底界面）';
   box.appendChild(foot);
 }
 function after(fit) { rebuild(fit); setInfo(); render(); }
 
 document.getElementById('cRes').addEventListener('change', e => {
-  resampleAll(+e.target.value); selSet.clear(); buildLayerList(); after(true);
+  resampleAll(+e.target.value); selSet.clear(); buildStratumList(); after(true);
 });
 document.getElementById('cSurf').addEventListener('change', e => { S.surf=e.target.value; after(false); });
 const cbs = { cWire:'showWire', cFill:'showFill', cHandles:'showHandles',
               cXray:'xray', cInter:'inter', cRule:'orderRule', cCurv:'curv',
+              cIface:'showIface',
               cContour:'showContour', cMapContour:'mapContour',
               cContourLabel:'contourLabel', cMapInter:'mapInter' };
 for (const id in cbs) {
@@ -1432,12 +1610,12 @@ document.getElementById('cDragSens').addEventListener('input', e => {
   document.getElementById('cDragSens_v').textContent = S.dragSens.toFixed(2);
   updateSensNote();
 });
-on('bAddLayer', () => { addLayer(true); S.active=S.layers.length-1; selSet.clear(); buildLayerList(); after(true); });
-on('bValley', () => { seedLayer(S.layers[S.active],'valley'); after(true); });
-on('bHills',  () => { seedLayer(S.layers[S.active],'hills');  after(true); });
-on('bFlat',   () => { seedLayer(S.layers[S.active],'flat');   after(false); });
-on('bRand',   () => { seedLayer(S.layers[S.active],'rand');   after(true); });
-on('bRelax',  () => { relaxLayer(S.layers[S.active]); after(false); });
+on('bAddLayer', () => { addStratum(); selSet.clear(); buildStratumList(); after(true); });
+on('bValley', () => { seedIface(S.ifaces[S.active],'valley'); after(true); });
+on('bHills',  () => { seedIface(S.ifaces[S.active],'hills');  after(true); });
+on('bFlat',   () => { seedIface(S.ifaces[S.active],'flat');   after(false); });
+on('bRand',   () => { seedIface(S.ifaces[S.active],'rand');   after(true); });
+on('bRelax',  () => { relaxIface(S.ifaces[S.active]); after(false); });
 on('bReset',  () => { camAz=238; camEl=28; after(true); });
 on('bSpin',   () => { S.autoRotate=!S.autoRotate;
   document.getElementById('bSpin').style.color = S.autoRotate ? '#8a5a3b' : ''; });
@@ -1448,18 +1626,22 @@ window.addEventListener('resize', () => { resize(); render(); });
    ============================================================ */
 function snapshot() {
   return {
-    format: 'outcrop-skeleton', version: 1, spacing: SPACING,
+    format: 'strata-editor', version: 2, spacing: SPACING,
     res: S.res, surf: S.surf,
     inter: { color: S.interColor.slice(), alpha: S.interAlpha },
     contour: { show: S.showContour, interval: S.contourInt, label: S.contourLabel,
                color: S.contourColor.slice(), alpha: S.contourAlpha },
     map: { mode: S.mapMode, contour: S.mapContour, inter: S.mapInter,
            dragSens: S.dragSens },
+    orderRule: S.orderRule, showIface: S.showIface,
     view: { az: camAz, el: camEl, dist: camDist },
-    layers: S.layers.map(L => ({
-      name: L.name, order: L.order, color: L.color.slice(),
-      alpha: L.alpha, vis: L.vis,
-      z: Array.from(L.z, v => Math.round(v * 100) / 100),
+    // 交界面自下而上；地层数 = 交界面数 − 1，strata[k] 位于 ifaces[k] 与 ifaces[k+1] 之间
+    ifaces: S.ifaces.map(I => ({
+      name: I.name, color: I.color.slice(), alpha: I.alpha, vis: I.vis,
+      z: Array.from(I.z, v => Math.round(v * 100) / 100),
+    })),
+    strata: S.strata.map(st => ({
+      name: st.name, color: st.color.slice(), alpha: st.alpha, vis: st.vis,
     })),
   };
 }
@@ -1483,23 +1665,66 @@ function exportPng() {
 }
 function loadText(text) {
   const d = JSON.parse(text);
-  if (!d || d.format !== 'outcrop-skeleton') throw new Error('不是本程序保存的文件');
+  if (!d) throw new Error('不是本程序保存的文件');
   const res = d.res || 9;
-  const layers = (d.layers || []).map(o => {
-    const L = mkLayer(o.name || '层面', o.order || 1,
-                      (o.color && o.color.length === 3) ? o.color : [190,170,140],
-                      (typeof o.alpha === 'number') ? o.alpha : 0.55);
-    L.vis = o.vis !== false;
-    const z = Array.from(o.z || []);
-    if (z.length !== res*res) throw new Error('层面数据长度与控制网分辨率不符');
-    L.z = new Float32Array(z);
-    return L;
-  });
-  if (!layers.length) throw new Error('文件里没有层面');
+
+  if (d.format === 'strata-editor') {
+    const ifaces = (d.ifaces || []).map(o => {
+      const I = mkIface(o.name || '交界面',
+        (o.color && o.color.length === 3) ? o.color : [150,150,158],
+        (typeof o.alpha === 'number') ? o.alpha : 1);
+      I.vis = o.vis !== false;
+      const z = Array.from(o.z || []);
+      if (z.length !== res*res) throw new Error('交界面数据长度与控制网分辨率不符');
+      I.z = new Float32Array(z);
+      return I;
+    });
+    if (ifaces.length < 2) throw new Error('至少需要两个交界面才能构成地层');
+    const strata = (d.strata || []).map((o, k) => {
+      const st = mkStratum(o.name || ('地层 ' + (k+1)),
+        (o.color && o.color.length === 3) ? o.color : STRATA_COLORS[k % STRATA_COLORS.length],
+        (typeof o.alpha === 'number') ? o.alpha : 0.75);
+      st.vis = o.vis !== false;
+      return st;
+    });
+    if (strata.length !== ifaces.length - 1) throw new Error('地层数与交界面数对不上');
+    S.ifaces = ifaces; S.strata = strata;
+
+  } else if (d.format === 'outcrop-skeleton') {
+    /* 旧格式（只有"层面"）：按沉淀次序自下而上转成交界面，
+       相邻两个之间补一个地层。这样以前存的文件还能用。 */
+    const old = (d.layers || []).slice().sort((a,b) => (a.order||0) - (b.order||0));
+    if (old.length < 2) throw new Error('旧文件里至少要有两个层面才能转成交界面');
+    S.ifaces = old.map(o => {
+      const I = mkIface(o.name || '交界面');
+      const z = Array.from(o.z || []);
+      if (z.length !== res*res) throw new Error('层面数据长度与控制网分辨率不符');
+      I.z = new Float32Array(z);
+      return I;
+    });
+    S.strata = old.slice(0, -1).map((o, k) => {
+      const st = mkStratum('地层 ' + (k+1),
+        (o.color && o.color.length === 3) ? o.color : STRATA_COLORS[k % STRATA_COLORS.length],
+        (typeof o.alpha === 'number') ? o.alpha : 0.75);
+      st.vis = o.vis !== false;
+      return st;
+    });
+
+  } else {
+    throw new Error('不是本程序保存的文件');
+  }
+
   S.res = res;
   S.surf = (d.surf === 'approx') ? 'approx' : 'interp';
-  S.layers = layers;
-  S.active = 0;
+  S.active = S.ifaces.length - 1;            // 默认选中地表
+  if (typeof d.orderRule === 'boolean') {
+    S.orderRule = d.orderRule;
+    document.getElementById('cRule').checked = S.orderRule;
+  }
+  if (typeof d.showIface === 'boolean') {
+    S.showIface = d.showIface;
+    document.getElementById('cIface').checked = S.showIface;
+  }
   selSet.clear();
   document.getElementById('cRes').value = String(S.res);
   document.getElementById('cSurf').value = S.surf;
@@ -1541,7 +1766,7 @@ function loadText(text) {
       r.checked = (r.value === S.mapMode);
     });
   }
-  buildLayerList();
+  buildStratumList();
   rebuild(false);
   if (d.view) {
     camAz = +d.view.az || camAz;
@@ -1567,17 +1792,21 @@ fileIn.addEventListener('change', () => {
 });
 
 /* ============================================================
-   初始场景：一个层面，且是一个平面（所有控制点等高）。
-   要造倾斜面就拖控制点，或改 seedLayer 里的 'flat' 分支。
+   初始场景：两个交界面（都是平面）+ 夹在中间的一个地层。
+   这就是"新建地层"的起点：地表层面 + 它下方的交界面。
+   要造倾斜面就拖控制点，或改 seedIface 里的 'flat' 分支。
    ============================================================ */
 resize();
 {
-  const L1 = addLayer(false);
-  seedLayer(L1, 'flat');
-  L1.name = '层面 1'; L1.order = 1; L1.color = [196,168,112]; L1.alpha = 0.55;
-  S.active = 0;
+  const I1 = mkIface('交界面 1', [168,150,120], 1);
+  I1.z = new Float32Array(S.res * S.res).fill(400);
+  const I2 = mkIface('交界面 2', [130,142,156], 1);
+  I2.z = new Float32Array(S.res * S.res).fill(700);
+  S.ifaces = [I1, I2];
+  S.strata = [mkStratum('地层 1', [196,168,112], 0.75)];
+  S.active = 1;
 }
-buildLayerList();
+buildStratumList();
 rebuild(true);
 setInfo();
 render();
