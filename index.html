@@ -566,24 +566,20 @@ function computeIfaceFields() {
     I.S.fill(1e9);
   }
   if (!S.orderRule) return;
+  /* ①「更年轻的界面压在它下面」+ ②「更老的界面压在它上面」，取最小。
+     —— 这条规则只作用在【交界面那张薄面】上。地层实体不参与（见 buildStratum）。 */
   for (let i=0;i<n;i++) {
     const si = S.ifaces[i].S, zi = S.ifaces[i].Z;
     for (let q=0;q<SZ;q++) {
-      let s1 = 1e9, s2 = 1e9, isMax = true;
+      let s1 = 1e9, s2 = 1e9;
       const zq = zi[q];
       for (let j=0;j<n;j++) {
         if (j === i) continue;
         const zj = S.ifaces[j].Z[q];
-        if (zj > zq) isMax = false;
         if (j > i) { const d = zj - zq;  if (d < s1) s1 = d; }   // ① 更年轻的压在它下面
         else       { const d = zq - zj;  if (d < s2) s2 = d; }   // ② 更老的压在它上面
       }
-      /* 【当下最高的那个界面永远不透明】。
-         它是这一处的地表面 —— 把它丢掉，那里就一个面都没有了，
-         于是"该露出的地层是透明的"，等于什么都没露出来。
-         所以①只在"它不是最高"的前提下才算数。
-         （叠置正常时这条不影响任何东西：最高的本来就是最上面那个界面。） */
-      si[q] = isMax ? 1e9 : Math.min(s1, s2);
+      si[q] = s1 < s2 ? s1 : s2;
     }
   }
 }
@@ -607,27 +603,30 @@ function stratumAlpha(k) {
   return S.strata[k].alpha;
 }
 /* 把一个地层建成实体：顶面 + 底面 + 四周侧壁。
-   绕序一律朝外，渲染时先画背面再画正面（配合剔除），半透明才有正确层次。 */
+   绕序一律朝外，渲染时先画背面再画正面（配合剔除），半透明才有正确层次。
+
+   【地层实体不参与次序透明规则】，它只有一个判据：这一层自己存不存在。
+
+       厚度 = 上面那个界面的高程 − 下面那个界面的高程
+       厚度 ≥ 0 → 这一层存在 → 实心（顶面、底面、侧壁全都实心）
+       厚度 < 0 → 已经尖灭掉了 → 整层不画
+
+   所以每个顶点的场就直接写成【本层厚度】：厚度连续变化，尖灭边界就精确落在
+   相切线上，而且不需要任何"和界面场取 min""最高那个不透明"之类的补丁 ——
+   那些补丁全是为了让规则作用到地层上才需要的，现在规则不作用到这里，就都不要了。
+
+   为什么规则不作用到地层上：一个交界面会被【上下两个地层同时当作自己的边界】
+   （iface k+1 既是地层k 的顶面、又是地层k+1 的底面）。把界面的判据套到地层面上，
+   两个共用同一张面的地层就会得到相反的结论，怎么调都会有一边不对。
+   分开之后：面是透明的（规则管），岩体是实心的（存在性管），互不干扰。 */
 function buildStratum(k) {
   const st = S.strata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
   const Lm = mapL(), n = NS+1, NSq = NS*NS;
   const pos=[], nrm=[], col=[], idx=[], sA=[];
   const base = st.color.map(v=>v/255);
-  /* 【这个地层自己存不存在】：厚度 = 上面那个界面的高程 − 下面那个界面的高程。
-     厚度为负说明它已经尖灭掉了，那么它的【所有面都不该画】。
-
-     这条是必需的一步：一个交界面会被【上下两个地层同时当作自己的边界】——
-     比如 iface 1 既是地层0 的顶面、又是地层1 的底面，两者用的是同一个场。
-     于是只要那个场被判成不透明，两个面就一起画了出来，
-     上面那层明明已经尖灭，却靠自己的底面又出现在图里（"本该消失的地层又出现了"）。
-     把每个面的场再和本层的厚度取 min，厚度为负时整层自动消失，
-     而厚度为正的地方一个字都不改。 */
   const thick = q => top.Z[q] - bot.Z[q];
-  const withThick = (v, q) => {
-    if (!S.orderRule) return v;              // 关掉规则 = 看原始模型，什么都不藏
-    const d = thick(q);
-    return v < d ? v : d;
-  };
+  /* 关掉规则开关 = 看原始模型，什么都不藏 */
+  const layerF = q => S.orderRule ? thick(q) : 1e9;
   let kref = 1e-12;
   if (S.curv) {
     const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
@@ -646,7 +645,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(withThick(top.S[q], q));
+    sA.push(layerF(q));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -660,7 +659,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, bot.Z[q]);
     nrm.push(-bot.NX[q], -bot.NY[q], -bot.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(withThick(bot.S[q], q));
+    sA.push(layerF(q));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -678,26 +677,11 @@ function buildStratum(k) {
       const at = pos.length/3;
       pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
       pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
-      /* 侧壁的场 = 这一柱里【某个高度离控制它的那个更高界面还有多远】：
-            f(z) = min over j>k of ( z_j ) − z
-         这是关于 z 的一条斜率恒为 −1 的直线，两个端点正好落在上下两个界面上：
-            下沿 z = z_k      →  f = bot.S
-            上沿 z = z_{k+1}  →  f = min(0, top.S)
-         三角面的两个顶点就在这两端，所以线性插值出来的就是这条直线本身。
-         于是侧壁与顶面/底面【在两端严格一致】：
-            底面透明（bot.S < 0）→ 下沿透明；
-            顶面透明（top.S < 0）→ 上沿透明。
-         两端同号（含恰好相切、尖灭）就整条实心；只有一端为负时是一条【楔形】，
-         在相切处收拢到零；两端都为负才整条贯穿。
-
-         上沿那个 min(0, ·)：最上面那个界面若没有更高的界面压着，top.S 为正，
-         而几何上它到自己的间距恰好是 0，所以取 0 是有依据的（不是凑的数）。
-         现在最上面那个界面的场已经因为对称规则变成有限值了，
-         这里 min(0, ·) 依然是对的：正值一律折到 0。 */
-      const tf = q => { const s = top.S[q]; return s < 0 ? s : 0; };
-      /* 同样要和本层厚度取 min：本层尖灭掉的地方，侧壁也不该留 */
-      const th = [withThick(bot.S[q1],q1), withThick(bot.S[q2],q2), withThick(tf(q2),q2),
-                  withThick(bot.S[q1],q1), withThick(tf(q2),q2), withThick(tf(q1),q1)];
+      /* 侧壁同样只用【本层厚度】：本层存在就实心，尖灭掉就整条不画。
+         厚度沿柱子的走向是连续的，所以尖灭边界精确落在相切线上，
+         侧壁在相切处自然收拢收成零宽，不会留下一截孤零零的墙。 */
+      const th = [layerF(q1), layerF(q2), layerF(q2),
+                  layerF(q1), layerF(q2), layerF(q1)];
       for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }
