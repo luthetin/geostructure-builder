@@ -331,22 +331,28 @@ attribute vec3 aPos;
 attribute vec3 aNrm;
 attribute vec4 aCol;
 attribute float aS;
+attribute float aBand;
 uniform mat4 uMVP;
 varying vec3 vNrm;
 varying vec4 vCol;
 varying float vS;
-void main(){ vNrm=aNrm; vCol=aCol; vS=aS; gl_Position=uMVP*vec4(aPos,1.0); }`;
+varying float vBand;
+void main(){ vNrm=aNrm; vCol=aCol; vS=aS; vBand=aBand; gl_Position=uMVP*vec4(aPos,1.0); }`;
 const FS_SURF = `
 precision mediump float;
 varying vec3 vNrm;
 varying vec4 vCol;
 varying float vS;
+varying float vBand;
 uniform vec3 uLight;
 uniform vec3 uTint;
 uniform float uAmbient;
 uniform float uDiffuse;
 uniform float uAlpha;
 uniform float uTwoSided;
+uniform sampler2D uPal;      // 露头带调色板（最近邻）
+uniform float uPalN;
+uniform float uUsePal;
 void main(){
   /* 沉积次序规则：aS 是"本层与更高次序层面的最小高差"这一个【连续场】。
      在场上过零处丢弃，透明边界就精确落在两面的交线上。
@@ -355,10 +361,20 @@ void main(){
   if (vS < 0.0) discard;
   float a = uAlpha * vCol.a;
   if (a < 0.004) discard;
+  vec3 rgb = vCol.rgb;
+  /* 【露头带的颜色按片元查表，不插值】。
+     逐顶点上色时，两个带交界那一格里颜色是线性混过去的，过渡带整整一格宽
+     （≈42 m），窄带盖不住，露出来的就是毛边/锯齿。
+     floor(vBand+0.5) 让每个片元取到【最近的那个带】，颜色边界于是锐利地
+     落在两带的中间位置，再由画在那里的交线窄带盖住。 */
+  if (uUsePal > 0.5) {
+    float idx = floor(vBand + 0.5);
+    rgb = texture2D(uPal, vec2((idx + 0.5)/uPalN, 0.5)).rgb;
+  }
   vec3 n = normalize(vNrm);
   float d = dot(n, uLight);
   if (uTwoSided > 0.5) d = abs(d);
-  gl_FragColor = vec4(vCol.rgb * uTint * (uAmbient + uDiffuse*max(d,0.0)), a);
+  gl_FragColor = vec4(rgb * uTint * (uAmbient + uDiffuse*max(d,0.0)), a);
 }`;
 const VS_PT = `
 attribute vec3 aPos;
@@ -385,17 +401,40 @@ function mkProg(vs, fs) {
   return p;
 }
 const progSurf = mkProg(VS_SURF, FS_SURF), progPt = mkProg(VS_PT, FS_PT);
-const US = {}; for (const n of ['uMVP','uLight','uTint','uAmbient','uDiffuse','uAlpha','uTwoSided'])
+const US = {}; for (const n of ['uMVP','uLight','uTint','uAmbient','uDiffuse','uAlpha','uTwoSided',
+                               'uPal','uPalN','uUsePal'])
   US[n] = gl.getUniformLocation(progSurf, n);
 const AS = { pos:gl.getAttribLocation(progSurf,'aPos'), nrm:gl.getAttribLocation(progSurf,'aNrm'),
-             col:gl.getAttribLocation(progSurf,'aCol'), s:gl.getAttribLocation(progSurf,'aS') };
+             col:gl.getAttribLocation(progSurf,'aCol'), s:gl.getAttribLocation(progSurf,'aS'),
+             band:gl.getAttribLocation(progSurf,'aBand') };
+
+/* 【露头带调色板】1×N 的纹理，NEAREST 采样 —— 片元按带号取色，颜色边界于是锐利。
+   之所以不用逐顶点颜色：两带交界那一格里颜色会线性混过去，过渡带整整一格宽
+   （≈42 m），窄带盖不住，露出来就是毛边/锯齿。 */
+const PAL = { tex:null, n:0 };
+function updatePalette() {
+  const cols = [ S.baseColor ].concat(S.strata.map(st => st.color));
+  const N = cols.length;
+  const data = new Uint8Array(N*4);
+  for (let i=0;i<N;i++){ data[i*4]=cols[i][0]; data[i*4+1]=cols[i][1]; data[i*4+2]=cols[i][2]; data[i*4+3]=255; }
+  if (!PAL.tex) {
+    PAL.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, PAL.tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  } else gl.bindTexture(gl.TEXTURE_2D, PAL.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  PAL.n = N;
+}
 const UP = { uMVP:gl.getUniformLocation(progPt,'uMVP'), uSize:gl.getUniformLocation(progPt,'uSize') };
 const AP = { pos:gl.getAttribLocation(progPt,'aPos'), col:gl.getAttribLocation(progPt,'aCol') };
 
 gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND);
 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-function mesh(pos, nrm, col, idx, sArr) {
+function mesh(pos, nrm, col, idx, sArr, bandArr) {
   const B=(d,t)=>{const b=gl.createBuffer();gl.bindBuffer(t,b);gl.bufferData(t,d,gl.STATIC_DRAW);return b;};
   const P=new Float32Array(pos);
   let Nn;
@@ -403,16 +442,18 @@ function mesh(pos, nrm, col, idx, sArr) {
   else { Nn=new Float32Array(P.length); for(let i=2;i<Nn.length;i+=3) Nn[i]=1; }
   const nv = P.length/3;
   const Sv = sArr ? new Float32Array(sArr) : new Float32Array(nv).fill(1e9);
+  /* bandArr：露头带编号（逐顶点），只有地表的顶面用它；其余一律 -1 */
+  const Bv = bandArr ? new Float32Array(bandArr) : new Float32Array(nv).fill(-1);
   return { pos:B(P,gl.ARRAY_BUFFER), nrm:B(Nn,gl.ARRAY_BUFFER),
     col:B(new Float32Array(col),gl.ARRAY_BUFFER),
-    sbuf:B(Sv,gl.ARRAY_BUFFER),
+    sbuf:B(Sv,gl.ARRAY_BUFFER), bbuf:B(Bv,gl.ARRAY_BUFFER),
     idx: idx?B(new Uint16Array(idx),gl.ELEMENT_ARRAY_BUFFER):null,
-    n: idx?idx.length:P.length/3, _pos:P, _col:new Float32Array(col), _s:Sv, _nrm:Nn };
+    n: idx?idx.length:P.length/3, _pos:P, _col:new Float32Array(col), _s:Sv, _nrm:Nn, _band:Bv };
 }
 function dispose(m) {
   if (!m) return;
   gl.deleteBuffer(m.pos); gl.deleteBuffer(m.nrm); gl.deleteBuffer(m.col);
-  gl.deleteBuffer(m.sbuf);
+  gl.deleteBuffer(m.sbuf); if (m.bbuf) gl.deleteBuffer(m.bbuf);
   if (m.idx) gl.deleteBuffer(m.idx);
 }
 /* 图元模式必须显式传对：线框网格存的是两两成对的线段顶点，
@@ -431,6 +472,20 @@ function drawGeom(m, mvp, amb, dif, alpha, two, mode, tint) {
   gl.bindBuffer(gl.ARRAY_BUFFER,m.sbuf);
   gl.enableVertexAttribArray(AS.s);
   gl.vertexAttribPointer(AS.s,1,gl.FLOAT,false,0,0);
+  /* 露头带号：只有地表的顶面有真值，其余用 -1（着色器里 uUsePal 关掉就不管子） */
+  if (AS.band >= 0 && m.bbuf) {
+    gl.bindBuffer(gl.ARRAY_BUFFER,m.bbuf);
+    gl.enableVertexAttribArray(AS.band);
+    gl.vertexAttribPointer(AS.band,1,gl.FLOAT,false,0,0);
+  }
+  if (US.uPal) {
+    gl.activeTexture(gl.TEXTURE0);
+    if (!PAL.tex) updatePalette();
+    gl.bindTexture(gl.TEXTURE_2D, PAL.tex);
+    gl.uniform1i(US.uPal, 0);
+    gl.uniform1f(US.uPalN, PAL.n);
+    gl.uniform1f(US.uUsePal, m._pal ? 1 : 0);
+  }
   gl.__mode=mode; gl.__count=m.n;
   if (m.idx) { gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,m.idx); gl.drawElements(mode,m.n,gl.UNSIGNED_SHORT,0); }
   else gl.drawArrays(mode,0,m.n);
@@ -672,14 +727,20 @@ function buildStratum(k) {
      会让某个老层的底面反而最高而被选中，于是地表在根本没有相交的地方也变了颜色。 */
   const isLid = (top === S.ifaces[S.ifaces.length-1]);
   const topIfaceZ = isLid ? top.Z : null;
-  const exposedColor = (q) => {
+  /* 露头带编号：0 = 基底，k+1 = 地层 k。逐顶点给，片元里按最近邻查调色板取色。 */
+  const bandAt = (q) => {
     const zs = topIfaceZ[q];
     let pick = -1;
     for (let j=S.strata.length-1; j>=0; j--) {
       if (S.ifaces[j].Z[q] <= zs + 1e-3 && zs <= S.ifaces[j+1].Z[q] + 1e-3) { pick = j; break; }
     }
-    return pick < 0 ? S.baseColor.map(v=>v/255) : S.strata[pick].color.map(v=>v/255);
+    return pick + 1;
   };
+  const exposedColor = (q) => {
+    const b = bandAt(q);
+    return b <= 0 ? S.baseColor.map(v=>v/255) : S.strata[b-1].color.map(v=>v/255);
+  };
+  const bandArr = isLid ? new Array(SZ) : null;
   let kref = 1e-12;
   if (S.curv) {
     const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
@@ -711,6 +772,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
+    if (bandArr) bandArr[q] = bandAt(q);
     sA.push(isLid ? 1e9 : fieldAt(q, top.Z[q]));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
@@ -761,7 +823,9 @@ function buildStratum(k) {
   wall(east, 1, 0);                         // x=L 边，y 递增 → 法线朝 +x
 
   void NSq;
-  return mesh(pos,nrm,col,idx, sA);
+  const mmesh = mesh(pos,nrm,col,idx, sA, bandArr);
+  if (bandArr) mmesh._pal = true;      // 只有地表的顶面走调色板那条路
+  return mmesh;
 }
 /* 交界面本身也画出来（半透明薄面），带自己的颜色和透明度。
    沿法线抬高 1.5 m，免得和地层的顶/底面打架（z-fighting）。
@@ -1031,6 +1095,7 @@ function emitRibbon(polys, NXg, NYg, NZg, hw, ZA, ZB, gapTest, pos, nrm, col) {
 function buildIntersections() {
   const out = [];
   const IFS = S.ifaces;
+  const gs = mapL()/NS;
   const F = new Float32Array(SZ);
   for (let i=0;i<IFS.length;i++) for (let j=i+1;j<IFS.length;j++) {
     const A = IFS[i], B = IFS[j];
@@ -1038,7 +1103,16 @@ function buildIntersections() {
     const polys = stitchContours(F);
     if (!polys.length) continue;
     const pos=[], nrm=[], col=[];
-    emitRibbon(polys, A.NX, A.NY, A.NZ, HW, A.Z, B.Z, null, pos, nrm, col);
+    /* 【表露面上的那条带边界要加宽】。地表（最上面那个界面）与别的界面相交时，
+       交线正好是露头带换颜色的地方。
+       颜色本身现在按片元查调色板，边界是锐利的；但带号是逐顶点给的，
+       锐利边界落在两带【带号取中】的地方，也就是跨接那一格的中点 ——
+       比真实交线最多偏半个网格步长（≈21 m）。窄带只有 ±HW（16 m），
+       盖不住这个位置偏差，两边各露出一截，看着就是毛边。
+       所以涉及地表的交线用能盖住半格的宽度，其余交线仍然是细线。 */
+    const hw = (i === IFS.length-1 || j === IFS.length-1)
+             ? Math.max(HW, gs*0.55) : HW;
+    emitRibbon(polys, A.NX, A.NY, A.NZ, hw, A.Z, B.Z, null, pos, nrm, col);
     if (pos.length) out.push(mesh(pos,nrm,col,null));
   }
   return out;

@@ -101,6 +101,7 @@ globalThis.__api = {
   get meshIfaces(){ return meshIfaces; },
   get meshHandles(){ return meshHandles; }, get meshInter(){ return meshInter; },
   get meshContour(){ return meshContour; }, get mapState(){ return mapState; },
+  get paletteN(){ return PAL.n; },
   get mapInterSegs(){ return mapInterSegs; },
 };
 `;
@@ -379,6 +380,31 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         layerBad === 0, `${layerBad} 个不符`);
   check("【面与剖面都不高过 C_k】—— 不该显示的岩体没有显示",
         capOver === 0, `${capOver} 个顶点越界`);
+
+  /* 【露头带的颜色按片元查调色板，不插值】
+     逐顶点上色时，两个带交界那一格的颜色是线性混过去的 —— 过渡带整整一格宽
+     （≈42 m），窄带盖不住，露出来的就是毛边/锯齿。改成逐顶点给"带号"、
+     片元里按最近邻查调色板取色之后，颜色边界是锐利的。 */
+  {
+    const lid = api.meshStrata[S.strata.length-1];
+    check("地表顶面带上了【露头带号】缓冲", !!lid && !!lid.bbuf && !!lid._band,
+          lid && lid._band ? `${lid._band.length} 个顶点` : "没有");
+    if (lid && lid._band) {
+      let lo = Infinity, hi = -Infinity, n = 0;
+      for (let q=0;q<SZ;q++) {
+        const b = lid._band[q];
+        if (b < lo) lo = b; if (b > hi) hi = b; n++;
+      }
+      check("带号都在调色板范围内（0 = 基底，k+1 = 地层 k）",
+            lo >= 0 && hi <= S.strata.length,
+            `带号 ${lo} ~ ${hi}，调色板 ${S.strata.length+1} 项`);
+      check("带号覆盖了至少两种（不然露头带只有一种颜色）", lo !== hi, `${lo} ~ ${hi}`);
+    }
+    check("该网格标了使用调色板（其余几何不走这条路）",
+          !!lid && lid._pal === true);
+    api.render();
+    check("调色板纹理已经建立", api.paletteN >= 2, `${api.paletteN} 项`);
+  }
 
   /* 【软最小值必须是"往保守那边偏"】：它恒 ≤ 硬 min，所以绝不会多显示任何东西。
      顺带量一下剖面分界线的拐折（"锯齿"就是这个）。 */
