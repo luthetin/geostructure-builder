@@ -624,39 +624,48 @@ function buildStratum(k) {
   const Lm = mapL(), n = NS+1, NSq = NS*NS;
   const pos=[], nrm=[], col=[], idx=[], sA=[];
   const base = st.color.map(v=>v/255);
-  /* 地层实体的判据有两条，取更严的那个：
+  /* ---- 地层实体只有一个判据：一个界面之上，只能出现层序比它【高】的岩层 ----
+        C_k(x,y) = min over i>k of （界面 i 的高程）
+                  = 该柱上所有【比本层年轻的界面】里最低的那个
+        每个顶点的场 = C_k − 顶点自身高程；场为负就不画。
 
-     ① 本层存不存在：厚度 = 上面那个界面的高程 − 下面那个界面的高程
-          厚度 ≥ 0 → 存在 → 实心；厚度 < 0 → 尖灭掉了 → 整层不画
-
-     ② 【地表之上不许有东西】：某个更深的界面拱穿了地表时，夹着它的老地层
-        会探到地表之上，看上去就是"地表层上面冒出了别的岩层"。
-        所以每个顶点再和 (地表高程 − 顶点自身高程) 取 min：
-        高出地表的顶点直接判负 → 那片被裁掉，模型的上界严格就是地表。
-
-     两条都是连续场，过零处丢弃，所以尖灭边界和裁剪边界都精确落在交线上。
-     关掉规则开关 = 看原始模型，两条都不生效。 */
-  const ceil = S.ifaces[S.ifaces.length-1];        // 最上面那个界面 = 地表
-  /* 最上面那个地层的顶面【就是地表本身】—— 它是模型的盖子，永远要画。
-     少了它，深部界面拱穿地表的那片会在地表上留下一个洞，从上面直接看进模型内部。 */
-  const isLid = (top === ceil);
-  const thick = q => top.Z[q] - bot.Z[q];
-  const fieldAt = (q, z) => {
-    if (!S.orderRule) return 1e9;
-    const d = thick(q), ce = ceil.Z[q] - z;
-    return d < ce ? d : ce;
-  };
+     这一条把之前几条补丁全包含了，不用再加别的：
+       · 本层尖灭（厚度 < 0）：C_k ≤ 界面 k+1 的高程，所以底面的场 ≤ 厚度，
+         厚度为负时底面也判负 → 整层消失
+       · 地表之上不许有东西：C_k ≤ 地表高程（地表是 i>k 里的一员），
+         顶点高过地表就判负 → 剪掉
+       · 最上面那层的顶面是盖子：那一层只有 i=n−1 一个参照，C = 地表高程，
+         顶面的场恰好是 0 → 永远画着，地表天然是完整的盖子
+     因为 C 是连续的，所有边界（尖灭线、裁剪线）都精确落在界面的交线上。 */
+  const C = new Float32Array(SZ);
+  for (let q=0;q<SZ;q++) {
+    let lo = Infinity;
+    for (let i=k+1;i<S.ifaces.length;i++) { const z = S.ifaces[i].Z[q]; if (z < lo) lo = z; }
+    C[q] = isFinite(lo) ? lo : bot.Z[q];
+  }
+  const fieldAt = (q, z) => S.orderRule ? (C[q] - z) : 1e9;
   let kref = 1e-12;
   if (S.curv) {
     const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
     av.sort((p,r)=>p-r); kref = Math.max(av[Math.floor(SZ*0.9)], 1e-12);
   }
-  const capColor = (K) => {
-    if (!S.curv) return base;
+  const capColorOf = (col0, K) => {
+    if (!S.curv) return col0;
     const t = Math.sign(K)*Math.sqrt(Math.min(1,Math.abs(K)/kref));
     return t>=0 ? lerp3([0.85,0.85,0.82],[0.78,0.30,0.18],t)
                 : lerp3([0.85,0.85,0.82],[0.20,0.42,0.72],-t);
   };
+  const capColor = (K) => capColorOf(base, K);
+  /* 底面的颜色用【下面那一层的颜色】。
+     理由：iface k 这张面被画了两遍 —— 上面那层的底面、下面那层的顶面，
+     两者几何上完全重合、可见性也完全相同（C_{k-1} = min(z_k, C_k)，场恒等）。
+     颜色不一样时就是一片 z-fighting 的重叠面，透过透明的地表看下去
+     交线里外都糊成一个颜色。改成同色之后，这张面就是【下面那一层的顶面】
+     这一个颜色 —— 跟真实地层露头一样，一层一层地换色。
+     最下面那层（k=0）的底面接的是基底，就用基底的颜色。 */
+  const baseBelow = (k > 0) ? S.strata[k-1].color.map(v=>v/255)
+                            : S.baseColor.map(v=>v/255);
+  const botCapColor = (K) => capColorOf(baseBelow, K);
 
   /* ---- 顶面：法线朝上，从上方看是逆时针 ---- */
   for (let b=0;b<n;b++) for (let a=0;a<n;a++) {
@@ -664,7 +673,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(isLid ? 1e9 : fieldAt(q, top.Z[q]));
+    sA.push(fieldAt(q, top.Z[q]));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -674,7 +683,7 @@ function buildStratum(k) {
   /* ---- 底面：法线朝下，绕序相反 ---- */
   const botBase = pos.length/3;
   for (let b=0;b<n;b++) for (let a=0;a<n;a++) {
-    const q=b*n+a, c = capColor(bot.K[q]);
+    const q=b*n+a, c = botCapColor(bot.K[q]);
     pos.push(Lm*a/NS, Lm*b/NS, bot.Z[q]);
     nrm.push(-bot.NX[q], -bot.NY[q], -bot.NZ[q]);
     col.push(c[0],c[1],c[2],1);

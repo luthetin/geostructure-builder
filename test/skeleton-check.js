@@ -343,8 +343,14 @@ console.log("\n─── I. 沉积次序透明规则 ───");
   /* 【地层实体不参与次序规则】—— 它只有两条判据，取更严的那个：
        ① 本层厚度（尖灭掉就不画）   ② 顶点不高于地表（地表之上不许有东西）
      例外：最上面那个地层的顶面是盖子，永远画。 */
-  const Lm0 = api.mapL(), nn = NS+1, ceilI = ii[ii.length-1];
-  let layerBad = 0, layerGone = 0, layerAlive = 0;
+  /* 【地层实体的唯一判据】—— 一个界面之上，只能出现层序比它【高】的岩层。
+     写成场就是：  场 = C_k − 顶点高程，   C_k = min over i>k of 界面 i 的高程
+     这一条把"厚度为负就不画""地表之上不许有东西""最上面那层是盖子"全包含了。 */
+  const Lm0 = api.mapL(), nn = NS+1;
+  const Cof = (k,q) => { let lo=Infinity;
+    for (let i=k+1;i<ii.length;i++){ const z=ii[i].Z[q]; if (z<lo) lo=z; }
+    return isFinite(lo) ? lo : ii[k].Z[q]; };
+  let layerBad = 0, layerGone = 0, layerAlive = 0, overC = 0;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
     for (let v=0; v<mm._pos.length/3; v++) {
@@ -352,18 +358,19 @@ console.log("\n─── I. 沉积次序透明规则 ───");
       const a = Math.round(x/Lm0*NS), bq = Math.round(y/Lm0*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
       const q = bq*nn + a;
-      const th = ii[k+1].Z[q] - ii[k].Z[q];
-      const ce = ceilI.Z[q] - z;
-      const isLid = (k === S.strata.length-1 && v < SZ);
-      const gone = !isLid && (th < 0 || ce < 0);
-      if ((mm._s[v] < 0) !== gone) layerBad++;
-      if (gone) layerGone++; else layerAlive++;
+      const want = Cof(k,q) - z;
+      if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1, Math.abs(want))) layerBad++;
+      if (mm._s[v] < 0) layerGone++; else layerAlive++;
+      /* 画出来的顶点一律不得高过 C_k —— 这就是那条规则 */
+      if (mm._s[v] >= 0 && z > Cof(k,q) + 0.5) overC++;
     }
   }
-  check("地层实体：min(本层厚度, 地表高程−顶点高程) < 0 才不画（盖子豁免）",
-        layerBad === 0 && layerGone > 0 && layerAlive > 0,
-        `${layerAlive} 个实心 / ${layerGone} 个不画，不符 ${layerBad}`);
-  check("上面那层确实尖灭掉了（构造有效，不是空跑）", layerGone > 0, `${layerGone} 个顶点不画`);
+  check("地层实体的场 = C_k − 顶点高程（C_k = 比它年轻的界面里最低的那个）",
+        layerBad === 0, `${layerBad} 个不符`);
+  check("【画出来的顶点一律不高于 C_k】—— 一个界面之上只有层序更高的岩层",
+        overC === 0, `${overC} 个顶点越界`);
+  check("确实有被裁掉的部分（构造有效，不是空跑）", layerGone > 0,
+        `${layerAlive} 个实心 / ${layerGone} 个不画`);
   check("min 场仍然保留（供面板统计用），但渲染已经不用它了",
         S.strata[0].S.every((v,q) => v === Math.min(S.ifaces[0].S[q], S.ifaces[1].S[q])));
 
@@ -844,7 +851,7 @@ console.log("\n─── Y. 纯平地面（地块底面）───");
 }
 
 /* ============================================================ I3 */
-console.log("\n─── I3. 地层实体：两条判据取严（本层厚度 / 不高于地表）───");
+console.log("\n─── I3. 地层实体：一个界面之上只能出现层序比它高的岩层 ───");
 {
   const n = NS+1, iE = NS, Lm = api.mapL();
   const mk = (f, col) => { const I = api.mkIface('I', col, 1);
@@ -866,15 +873,14 @@ console.log("\n─── I3. 地层实体：两条判据取严（本层厚度 / 
   S.active = 2; S.showBase = true;
   api.rebuild(false);
 
-  const ceil = S.ifaces[2];
   const Z = S.ifaces.map(I => I.Z);
   const thickAt = (k,q) => Z[k+1][q] - Z[k][q];
-  const wantAt = (k,q,z) => {
-    const d = thickAt(k,q), ce = ceil.Z[q] - z;
-    return d < ce ? d : ce;
-  };
+  const Cof = (k,q) => { let lo=Infinity;
+    for (let i=k+1;i<Z.length;i++){ if (Z[i][q]<lo) lo=Z[i][q]; }
+    return lo; };
+  const wantAt = (k,q,z) => Cof(k,q) - z;
 
-  /* ---- 逐顶点核对：场 = min(本层厚度, 地表高程 − 顶点高程) ---- */
+  /* ---- 逐顶点核对：场 = C_k − 顶点高程 ---- */
   let mism = 0, tot = 0;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
@@ -883,20 +889,14 @@ console.log("\n─── I3. 地层实体：两条判据取严（本层厚度 / 
       const a=Math.round(x/Lm*NS), bq=Math.round(y/Lm*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
       const q = bq*n + a;
-      /* 例外：最上面那个地层的顶面是盖子，永远画 */
-      if (k === S.strata.length-1 && v < SZ) {
-        if (mm._s[v] < 0) mism++;
-        tot++; continue;
-      }
       const want = wantAt(k,q,z);
       if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1,Math.abs(want))) mism++;
       tot++;
     }
   }
-  check("每个顶点的场 = min(本层厚度, 地表高程 − 顶点高程)",
-        mism === 0, `${mism}/${tot} 个不符`);
+  check("每个顶点的场 = C_k − 顶点高程", mism === 0, `${mism}/${tot} 个不符`);
 
-  /* ---- 【本节的要害】画出来的顶点不许有一个高出地表 ---- */
+  /* ---- 【本节的要害】画出来的顶点，一个都不许高过它自己的 C_k ---- */
   let above = 0, drawn = 0, worst = -Infinity;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
@@ -905,47 +905,37 @@ console.log("\n─── I3. 地层实体：两条判据取严（本层厚度 / 
       const x=mm._pos[3*v], y=mm._pos[3*v+1], z=mm._pos[3*v+2];
       const a=Math.round(x/Lm*NS), bq=Math.round(y/Lm*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
-      const d = z - ceil.Z[bq*n+a];
+      const d = z - Cof(k, bq*n+a);
       drawn++;
       if (d > 0.5) above++;
       if (d > worst) worst = d;
     }
   }
-  check("【地表之上一个画出来的顶点都没有】",
+  check("【画出来的顶点一律不高过 C_k】—— 一个面之上只有层序更高的岩层",
         above === 0 && drawn > 0, `${drawn} 个顶点里越界 ${above} 个，最高 ${worst.toFixed(1)} m`);
 
   /* ---- 构型有效：确实有界面拱穿地表 ---- */
   let archN = 0, thickNeg = 0;
   for (let q=0;q<SZ;q++) {
-    if (Z[1][q] > ceil.Z[q]) archN++;
+    if (Z[1][q] > Z[2][q]) archN++;
     if (thickAt(1,q) < 0) thickNeg++;
   }
   check("构型有效：中界面确实拱穿地表（不是空跑）", archN > 0 && thickNeg > 0,
         `${archN} 点拱穿 / ${thickNeg} 点厚度为负`);
 
-  /* ---- 拱穿处：上面那层整层不画 ---- */
-  let deadCols=0, deadAll=0;
+  /* ---- 拱穿处：上面那层连底面都不画（只可能剩一条零高度的残边） ---- */
+  let deadCols=0, deadCap=0;
   const mmTop = api.meshStrata[1];
   for (let j=0;j<NS;j++) {
     const q = j*n + iE;
     if (thickAt(1,q) >= 0) continue;
     deadCols++;
-    const topCap = mmTop._s[q] < 0 || S.strata.length-1 === 1;   // 顶部是盖子则豁免
-    const botCap = mmTop._s[SZ+q] < 0;
-    let wallAny = false;
-    for (let v=2*SZ; v<mmTop._pos.length/3; v++) {
-      const x=mmTop._pos[3*v], y=mmTop._pos[3*v+1];
-      if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;
-      if (Math.round(y/Lm*NS) !== j) continue;
-      if (mmTop._s[v] >= 0) wallAny = true;
-    }
-    if (botCap && !wallAny) deadAll++;
-    void topCap;
+    if (mmTop._s[SZ+q] < 0) deadCap++;      // 底面（与下层的顶面共面那张）
   }
-  check("拱穿处：尖灭掉的那层【底面和侧壁都不画】",
-        deadCols > 0 && deadAll === deadCols, `${deadCols} 个尖灭柱，其中 ${deadAll} 柱隐藏`);
+  check("拱穿处：尖灭掉的那层【底面不画】（不会靠共面那张面又冒出来）",
+        deadCols > 0 && deadCap === deadCols, `${deadCols} 个尖灭柱，其中 ${deadCap} 柱底面隐藏`);
 
-  /* ---- 地表永远是个完整的盖子（不能被裁出洞） ---- */
+  /* ---- 地表永远是个完整的盖子 ---- */
   let lid = 0;
   for (let q=0;q<SZ;q++) if (mmTop._s[q] >= 0) lid++;
   check("地表（最上面那个地层的顶面）始终是完整的盖子，一个洞都没有",
