@@ -410,8 +410,11 @@ const AS = { pos:gl.getAttribLocation(progSurf,'aPos'), nrm:gl.getAttribLocation
 
 /* 【露头带调色板】1×N 的纹理，NEAREST 采样 —— 片元按带号取色，颜色边界于是锐利。
    之所以不用逐顶点颜色：两带交界那一格里颜色会线性混过去，过渡带整整一格宽
-   （≈42 m），窄带盖不住，露出来就是毛边/锯齿。 */
-const PAL = { tex:null, n:0 };
+   （≈42 m），窄带盖不住，露出来就是毛边/锯齿。
+   ⚠ 必须在地层颜色/数量变化后重建（rebuild 里调）。只在"还没建过"时建一次的话，
+   打开新模型后调色板还停在开屏那一版：更靠后的带号会被 CLAMP_TO_EDGE 夹到
+   最后一格，整个表露面就变成一种颜色。 */
+const PAL = { tex:null, n:0, cols:[] };
 function updatePalette() {
   const cols = [ S.baseColor ].concat(S.strata.map(st => st.color));
   const N = cols.length;
@@ -427,6 +430,7 @@ function updatePalette() {
   } else gl.bindTexture(gl.TEXTURE_2D, PAL.tex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
   PAL.n = N;
+  PAL.cols = cols.map(c => [c[0],c[1],c[2]]);
 }
 const UP = { uMVP:gl.getUniformLocation(progPt,'uMVP'), uSize:gl.getUniformLocation(progPt,'uSize') };
 const AP = { pos:gl.getAttribLocation(progPt,'aPos'), col:gl.getAttribLocation(progPt,'aCol') };
@@ -1463,6 +1467,7 @@ function rebuild(fit) {
   const [lo,hi] = zRangeAll();
   camTarget = [mapL()/2, mapL()/2, (lo+hi)/2];
   if (fit || !camInit) { camDist = mapL()*1.95; camInit = true; }
+  updatePalette();                // 地层颜色/数量可能刚变过，调色板必须跟着重建
   drawMap();                      // 平面图随编辑实时更新
 }
 

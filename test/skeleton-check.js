@@ -35,10 +35,20 @@ const GLC = { DEPTH_TEST:1, BLEND:2, SRC_ALPHA:3, ONE_MINUS_SRC_ALPHA:4, ARRAY_B
   LINK_STATUS:11, TRIANGLES:12, POINTS:13, UNSIGNED_SHORT:14, FLOAT:15,
   COLOR_BUFFER_BIT:16, DEPTH_BUFFER_BIT:17, LINES:18, CULL_FACE:19, FRONT:20, BACK:21 };
 const draws = [];
+/* 纹理上传记录：调色板这类"传一次、之后靠 d.ts 记住"的资源，只有记下上传内容
+   才能验"换了模型以后传的还是不是新的"。 */
+const texUploads = [];
 let gDT = false, gDM = true, gCull = null;
 const fakeGL = new Proxy({
   getShaderParameter: () => true, getProgramParameter: () => true,
   createShader: () => ({}), createProgram: () => ({}), createBuffer: () => ({}),
+  /* 【必须返回真值】：真机的 createTexture 返回一个对象（真值）。
+     这里若返回 undefined，"if (!PAL.tex) 就重建" 会退化成"每次都重建"，
+     调色板过期这种 bug 就永远测不出来。 */
+  createTexture: () => ({ __tex:true }),
+  texImage2D: (target, level, ifmt, w, h, border, fmt, type, data) => {
+    texUploads.push({ w, h, data: data ? Array.from(data) : null });
+  },
   deleteBuffer: () => {}, getAttribLocation: () => 0, getUniformLocation: () => ({}),
   getShaderInfoLog: () => "", getProgramInfoLog: () => "",
   createImageData: (w, h) => ({ width:w, height:h, data: new Uint8ClampedArray(w*h*4) }),
@@ -102,6 +112,7 @@ globalThis.__api = {
   get meshHandles(){ return meshHandles; }, get meshInter(){ return meshInter; },
   get meshContour(){ return meshContour; }, get mapState(){ return mapState; },
   get paletteN(){ return PAL.n; },
+  get paletteCols(){ return PAL.cols; },
   get mapInterSegs(){ return mapInterSegs; },
 };
 `;
@@ -472,6 +483,33 @@ console.log("\n─── I1b. 曲率显示不能被调色板盖掉 ───");
   S.curv = false; api.rebuild(false);
   check("关掉曲率后，地表面又走回调色板",
         api.meshStrata[S.strata.length-1]._pal === true);
+}
+
+/* ============================================================ I1c */
+console.log("\n─── I1c. 调色板必须跟着模型重建（不能停在开屏那一版）───");
+{
+  /* 真机上 createTexture() 返回真值，于是"只在没建过时建一次"的写法会让调色板
+     永远停在开屏那一版：之后打开更大/不同配色的模型，更靠后的带号会被
+     CLAMP_TO_EDGE 夹到最后一格 —— 整个表露面变成一种颜色。 */
+  const colOf = c => [c[0],c[1],c[2]];
+  reset([(x,y)=>300, (x,y)=>900]);            // 开屏量级：1 个地层 ⇒ 调色板 2 项
+  api.render();
+  check("只有 1 个地层时，调色板 = 2 项（基底 + 地层）",
+        api.paletteN === 2 && texUploads.length > 0 && texUploads[texUploads.length-1].w === 2,
+        `PAL.n = ${api.paletteN}，纹理宽 ${texUploads[texUploads.length-1].w}`);
+
+  reset([(x,y)=>300,(x,y)=>700,(x,y)=>1100,(x,y)=>1500]);   // 换成 3 个地层的模型
+  api.render();
+  const want = [colOf(S.baseColor), ...S.strata.map(st=>colOf(st.color))];
+  const last = texUploads[texUploads.length-1];
+  check("换模型后调色板重建到 地层数+1 项",
+        api.paletteN === S.strata.length+1 && last.w === S.strata.length+1,
+        `PAL.n = ${api.paletteN}，纹理宽 ${last.w}，应当是 ${S.strata.length+1}`);
+  let bad = 0;
+  for (let i=0;i<want.length;i++)
+    for (let c=0;c<3;c++) if (last.data[i*4+c] !== want[i][c]) bad++;
+  check("传上去的颜色逐个 = 基底 + 各地层自身的颜色（不是旧模型那一版）",
+        bad === 0, `不符 ${bad} 个分量`);
 }
 
 /* ============================================================ I2 */
