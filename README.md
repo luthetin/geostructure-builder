@@ -9,6 +9,11 @@
 
 **在线版：https://luthetin.github.io/strata-skeleton/**（由 GitHub Pages 托管）
 
+> **相关链接**
+> - 🌐 在线应用：<https://luthetin.github.io/strata-skeleton/>
+> - 💻 代码仓库：<https://github.com/luthetin/strata-skeleton>
+> - 👤 作者个人网站：<https://luthetin.github.io/> ｜ [这个项目的介绍页](https://luthetin.github.io/strata-skeleton.html)
+
 ![界面](docs/screenshot.png)
 
 *左：地层柱（4 个交界面夹出 3 个地层）　中：三维视图（地层是实体，四周切面实心，最下面接基底构成封闭块体）　右：实时平面图*
