@@ -825,16 +825,17 @@ console.log("\n─── Y. 纯平地面（地块底面）───");
 }
 
 /* ============================================================ I3 */
-console.log("\n─── I3. 侧壁的透明场与顶/底面【同源】，两端严格一致 ───");
+console.log("\n─── I3. 侧壁透明的三种判法，各自的性质 ───");
 {
   const n = NS+1, iE = NS, Lm = api.mapL();
+  const onTop = [0,0,1,0,1,1];                 // 四边形里 [下,下,上,下,上,上]
 
-  /* 4 个界面，让"只有底面被埋""只有顶面被埋""两个都被埋"三种柱子同时出现：
+  /* 4 个界面，让三种情形同时出现：
        I0 = 1000            层序最老
        I1 = 1600            地层0 厚 600
        I2 = 1300 + 300v     地层1 的下界
        I3 = 2400            层序最新，平铺在最上面
-     v = j/NS*12 − 6 */
+     于是既有"只有下界面被埋"、也有"只有上界面被埋"、也有"两个都被埋"的柱子。 */
   const mk = (f, col) => { const I = api.mkIface('I', col, 1);
     I.z = new Float32Array(S.res*S.res);
     const c = (S.res-1)/2;
@@ -848,88 +849,225 @@ console.log("\n─── I3. 侧壁的透明场与顶/底面【同源】，两�
                api.mkStratum('地层 1', [125,158,120], 1.0),
                api.mkStratum('地层 2', [159,182,196], 1.0) ];
   S.active = 3; S.showBase = true;
-  api.rebuild(false);
 
-  /* 侧壁顶点：按它在四边形里的位置判断是上沿还是下沿（顺序 [下,下,上,下,上,上]） */
-  const onTopPattern = [0,0,1,0,1,1];
+  /* 取一组"同一 (x,y) 上的下沿场 / 上沿场"，三种判法共用 */
   const topEnd = (k,q) => { const s = S.ifaces[k+1].S[q]; return s < 0 ? s : 0; };
+  const wallFields = (k, x, y) => {
+    const a = Math.round(x/Lm*NS), bq = Math.round(y/Lm*NS), q = bq*n + a;
+    const bot = S.ifaces[k].S[q], top = S.ifaces[k+1].S[q];
+    return { bot, top, taper: { bot, top: topEnd(k,q) }, match: Math.min(bot, top) };
+  };
 
-  let mism = 0, wall = 0, offZ = 0;
-  for (let k=0;k<S.strata.length;k++) {
-    const mm = api.meshStrata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
-    for (let v = 2*SZ; v < mm._pos.length/3; v++) {
-      const x = mm._pos[3*v], y = mm._pos[3*v+1], z = mm._pos[3*v+2];
-      const a = Math.round(x/Lm*NS), bq = Math.round(y/Lm*NS), q = bq*n + a;
-      const isTop = onTopPattern[(v - 2*SZ) % 6] === 1;
-      const want = isTop ? topEnd(k,q) : bot.S[q];
-      if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1, Math.abs(want))) mism++;
-      if (Math.min(Math.abs(z-top.Z[q]), Math.abs(z-bot.Z[q])) > 1e-3) offZ++;
-      wall++;
-    }
-  }
-  check("侧壁顶点的场：下沿 = bot.S，上沿 = min(0, top.S)",
-        mism === 0, `${mism}/${wall} 个不符`);
-  check("侧壁顶点确实落在两个界面之一上", offZ === 0, `${offZ} 个对不上`);
-
-  /* 逐柱核对：侧壁的两端必须和顶/底面在【同一个 (x,y)】上给出同样的结论。
-     这就是"俯视图透明、侧视也该透明"的形式化。 */
-  let botBad = 0, topBad = 0, botSee = 0, topSee = 0;
-  for (let k=0;k<S.strata.length;k++) {
-    const mm = api.meshStrata[k];
-    for (let j=0;j<NS;j++) {
-      const q = j*n + iE;
-      const bc = mm._s[SZ + q] < 0;          // 底面（顶点顺序：0..SZ-1 顶面，SZ..2SZ-1 底面）
-      const tc = mm._s[q] < 0;               // 顶面
-      if (bc) botSee++;
-      if (tc) topSee++;
-      let wBot = null, wTop = null;
+  const forMode = (mode) => {
+    S.wallMode = mode; api.rebuild(false);
+    const res = [];
+    for (let k=0;k<S.strata.length;k++) {
+      const mm = api.meshStrata[k];
       for (let v = 2*SZ; v < mm._pos.length/3; v++) {
         const x = mm._pos[3*v], y = mm._pos[3*v+1];
-        if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;
-        if (Math.round(y/Lm*NS) !== j) continue;
-        if (onTopPattern[(v - 2*SZ) % 6] === 1) wTop = mm._s[v]; else wBot = mm._s[v];
+        if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;      // 只看 +x 那一面
+        res.push({ k, x, y, isTop: onTop[(v-2*SZ)%6] === 1, s: mm._s[v] });
       }
-      if (wBot === null || wTop === null) continue;
-      if (bc !== (wBot < 0)) botBad++;
-      if (tc !== (wTop < 0)) topBad++;
     }
-  }
-  check("底面透明 ⇔ 侧壁下沿透明（逐柱，3 个地层一起查）",
-        botBad === 0 && botSee > 0, `不符 ${botBad} 柱，底面透明共 ${botSee} 柱`);
-  check("顶面透明 ⇔ 侧壁上沿透明（逐柱，3 个地层一起查）",
-        topBad === 0 && topSee > 0, `不符 ${topBad} 柱，顶面透明共 ${topSee} 柱`);
+    return res;
+  };
 
-  /* 反例：上沿若用 +∞ 哨兵（不换成 0），顶面透明的地方上沿会保持不透明 ——
-     那正是"俯视图透明、侧面实心"这个 bug。 */
-  let sentinelBad = 0;
-  for (let k=0;k<S.strata.length;k++) {
-    for (let j=0;j<NS;j++) {
-      const q = j*n + iE;
-      const tc = S.ifaces[k+1].S[q] < 0;
-      const topEdgeWithSentinel = S.ifaces[k+1].S[q] < 0;   // 哨兵版：负才透，+∞ 永不透
-      if (tc !== topEdgeWithSentinel) sentinelBad++;
-    }
+  /* ---- match：侧壁与顶/底面【逐一对应、二值一致】 ---- */
+  const M = forMode('match');
+  let mBad = 0, mSee = 0;
+  for (const w of M) {
+    const f = wallFields(w.k, w.x, w.y);
+    if ((w.s < 0) !== (f.match < 0)) mBad++;
+    if (w.s < 0) mSee++;
   }
-  check("上沿若沿用 +∞ 哨兵，就不会有透明（哨兵永远不小于 0）",
-        sentinelBad === 0 && S.ifaces[3].S[0] >= 1e8,
-        `最上面的界面场 = ${S.ifaces[3].S[0].toExponential(0)}，上沿必须兜底成 0`);
+  check("match：侧壁下沿与上沿用同一个判据，且与顶/底面二值一致",
+        mBad === 0 && mSee > 0, `不符 ${mBad}/${M.length}，透明顶点 ${mSee}`);
 
-  /* 相切/尖灭：两端都不为负时侧壁必须实心 */
-  let tangentCols = 0, tangentSolid = 0;
+  /* 关键：match 模式下，只要该柱顶面或底面任一被判透明，整条柱子就透 —— 逐柱核对 */
+  let mColBad = 0, mColSee = 0, mCols = 0;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
     for (let j=0;j<NS;j++) {
-      const q = j*n + iE, q2 = (j+1)*n + iE;
-      if (S.ifaces[k].S[q] >= 0 && S.ifaces[k].S[q2] >= 0 &&
-          topEnd(k,q) >= 0 && topEnd(k,q2) >= 0) {
-        tangentCols++;
-        if (mm._s[q] >= 0) tangentSolid++;
+      const q = j*n + iE;
+      const capBotSee = mm._s[SZ + q] < 0, capTopSee = mm._s[q] < 0;
+      const expect = capBotSee || capTopSee;
+      let wBot=null, wTop=null;
+      for (const w of M) {
+        if (w.k !== k) continue;
+        if (Math.round(w.y/Lm*NS) !== j) continue;
+        if (w.isTop) wTop = w.s; else wBot = w.s;
       }
+      if (wBot === null || wTop === null) continue;
+      mCols++;
+      if (expect) mColSee++;
+      if ((wBot < 0) !== expect || (wTop < 0) !== expect) mColBad++;
     }
   }
-  check("两端界面都没被埋的柱子（含相切/尖灭）侧壁保持实心",
-        tangentCols > 0 && tangentSolid === tangentCols,
-        `${tangentSolid}/${tangentCols} 柱实心`);
+  check("match：顶面或底面任一面透 ⇒ 该柱侧壁整条透（即「俯视图透、侧面也透」）",
+        mColBad === 0 && mColSee > 0, `不符 ${mColBad}/${mCols} 柱，应透明 ${mColSee} 柱`);
+
+  /* ---- taper：两端都不为负时实心；只有一端为负时是楔形（不贯穿） ---- */
+  const T = forMode('taper');
+  let tBad = 0, tFullHole = 0, tWedge = 0, tSolid = 0;
+  for (let k=0;k<S.strata.length;k++) {
+    const mm = api.meshStrata[k];
+    for (let j=0;j<NS;j++) {
+      const q1 = j*n + iE, q2 = (j+1)*n + iE;
+      const b1 = S.ifaces[k].S[q1], b2 = S.ifaces[k].S[q2];
+      const u1 = topEnd(k,q1), u2 = topEnd(k,q2);
+      const endBot = (b1 + b2)/2, endTop = (u1 + u2)/2;
+      if (endBot >= 0 && endTop >= 0) tSolid++;
+      else if (endBot < 0 && endTop < 0) tFullHole++;
+      else tWedge++;
+    }
+  }
+  /* 逐顶点核对 taper 的两个端点值 */
+  for (const w of T) {
+    const f = wallFields(w.k, w.x, w.y);
+    const want = w.isTop ? f.taper.top : f.taper.bot;
+    if (Math.abs(w.s - want) > 1e-3*Math.max(1, Math.abs(want))) tBad++;
+  }
+  check("taper：下沿 = bot.S，上沿 = min(0, top.S)",
+        tBad === 0, `不符 ${tBad}/${T.length}`);
+  check("taper：两端同号（含恰好相切）的柱子保持实心",
+        tSolid > 0, `${tSolid} 柱实心 / ${tWedge} 柱楔形 / ${tFullHole} 柱贯穿`);
+  check("taper：只有一端为负时是楔形，不会出现贯穿的洞",
+        tWedge > 0, `${tWedge} 柱是楔形`);
+
+  /* ---- solid：侧壁完全不参与规则 ---- */
+  const Sd = forMode('solid');
+  let sNeg = 0;
+  for (const w of Sd) if (w.s < 0) sNeg++;
+  check("solid：侧壁一个顶点都不判透明", sNeg === 0, `${sNeg}/${Sd.length} 个透明顶点`);
+
+  /* ---- 三种模式确实互不相同（防止写成一个样子） ---- */
+  let diffMatchTaper = 0, diffTaperSolid = 0;
+  for (let i=0;i<M.length;i++) {
+    if ((M[i].s < 0) !== (T[i].s < 0)) diffMatchTaper++;
+    if ((T[i].s < 0) !== (Sd[i].s < 0)) diffTaperSolid++;
+  }
+  check("match 与 taper 在有些顶点上结论不同（确实是两种判法）",
+        diffMatchTaper > 0, `${diffMatchTaper} 个顶点不同`);
+  check("taper 与 solid 在有些顶点上结论不同",
+        diffTaperSolid > 0, `${diffTaperSolid} 个顶点不同`);
+
+  /* ---- 关掉规则开关：三种模式都不该再有任何透明 ---- */
+  S.orderRule = false;
+  let offNeg = 0;
+  for (const mode of ['match','taper','solid']) {
+    S.wallMode = mode; api.rebuild(false);
+    for (const m of api.meshStrata) if (m) for (let v=0;v<m._s.length;v++) if (m._s[v] < 0) offNeg++;
+  }
+  check("关掉次序规则后，三种模式的侧壁都不再判透明", offNeg === 0, `${offNeg} 个透明顶点`);
+  S.orderRule = true; S.wallMode = 'match'; api.rebuild(false);
+
+  /* ---- 存档要带上这个设置 ---- */
+  const snap = api.snapshot();
+  check("存档里记下了侧壁透明的模式", snap.wallMode === 'match', `wallMode = ${snap.wallMode}`);
+  S.wallMode = 'taper'; api.loadText(JSON.stringify(Object.assign({}, snap, {wallMode:'taper'})));
+  check("打开存档能恢复侧壁模式",
+        S.wallMode === 'taper' && doc.getElementById('cWall').value === 'taper',
+        `恢复为 ${S.wallMode}`);
+  S.wallMode = 'match'; api.rebuild(false);
+}
+
+/* ============================================================ I4 */
+console.log("\n─── I4. 基底（底平面 ↔ 第一个交界面之间那层）也必须服从规则 ───");
+{
+  const n = NS+1, iE = NS, Lm = api.mapL();
+  /* 关键构造：让【中界面】压到【下界面】之下。
+     于是 strat[1] 的板子会一直探到 z1 以下，和基底的切面在同一平面上重叠。
+     基底上沿到 z1 之间的那一截必须被丢掉，否则就是一片竖条纹的 z-fighting。 */
+  const mk = (f, col) => { const I = api.mkIface('I', col, 1);
+    I.z = new Float32Array(S.res*S.res);
+    const c = (S.res-1)/2;
+    for (let b=0;b<S.res;b++) for (let a=0;a<S.res;a++) I.z[b*S.res+a] = f(a-c, b-c);
+    return I; };
+  S.ifaces = [ mk(()=>1000,             [150,128,104]),
+               mk((u,v)=>1600 - 300*v,  [168,150,120]),   // 下层被这条压下去
+               mk(()=>2400,             [159,182,196]) ];
+  S.strata = [ api.mkStratum('地层 0', [210,150,96], 1.0),
+               api.mkStratum('地层 1', [125,158,120], 1.0) ];
+  S.active = 2; S.showBase = true;
+  api.rebuild(false);
+
+  const mB = api.meshBase, z0 = api.baseZ();
+  check("基底网格在", !!mB);
+
+  /* 基底的上沿顶点贴在 bot.Z 上，下沿贴在纯平地面上 */
+  let bad = 0, seeAbove = 0, opaqueAbove = 0, belowOpaque = 0, belowSee = 0, tot = 0;
+  for (let v=0; v<mB._pos.length/3; v++) {
+    const x = mB._pos[3*v], y = mB._pos[3*v+1], z = mB._pos[3*v+2];
+    if (Math.abs(z - z0) < 1e-3) continue;          // 跳过纯平地面本身
+    const a = Math.round(x/Lm*NS), bq = Math.round(y/Lm*NS);
+    if (a < 0 || a > NS || bq < 0 || bq > NS) continue;
+    const q = bq*n + a;
+    /* C = 该柱上最低的那个"比基底更高"的界面高程 */
+    let C = Infinity;
+    for (let j=1;j<S.ifaces.length;j++) C = Math.min(C, S.ifaces[j].Z[q]);
+    const transparent = mB._s[v] < 0;
+    const above = z > C;                            // 这一截被上面的地层占了
+    tot++;
+    if (transparent !== above) bad++;
+    if (above) { if (transparent) seeAbove++; else opaqueAbove++; }
+    else       { if (transparent) belowSee++; else belowOpaque++; }
+  }
+  check("基底切面：只有被上面地层占住的那一截（z > 最低的更高界面）才透明",
+        bad === 0 && tot > 0, `不符 ${bad}/${tot}`);
+  check("确实存在被占住的那一截（构造有效，不是空跑）",
+        seeAbove > 0, `C 以上 ${seeAbove} 个顶点透明`);
+  check("没有被占住的部分（C 以下）保持实心",
+        belowOpaque > 0 && belowSee === 0,
+        `C 以下 ${belowOpaque} 个实心 / ${belowSee} 个透明`);
+  void opaqueAbove;
+
+  /* 基底上沿的场 = ifaces[0] 的场（也就是它上方那个地层的底面场），两端一致 */
+  let capMism = 0, capChecked = 0;
+  const mm0 = api.meshStrata[0];
+  for (let j=0;j<NS;j++) {
+    const q = j*n + iE;
+    /* 地层0 的底面场（顶点顺序：0..SZ-1 顶面，SZ..2SZ-1 底面） */
+    const capSee = mm0._s[SZ + q] < 0;
+    /* 基底在东壁上的上沿顶点 */
+    let wTop = null;
+    for (let v=0; v<mB._pos.length/3; v++) {
+      const x = mB._pos[3*v], y = mB._pos[3*v+1], z = mB._pos[3*v+2];
+      if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;
+      if (Math.round(y/Lm*NS) !== j) continue;
+      if (Math.abs(z - z0) < 1e-3) continue;        // 只取上沿
+      wTop = mB._s[v];
+    }
+    if (wTop === null) continue;
+    capChecked++;
+    if (capSee !== (wTop < 0)) capMism++;
+  }
+  check("基底上沿与它上方那个地层的底面【同源、结论一致】",
+        capMism === 0 && capChecked > 0, `不符 ${capMism}/${capChecked}`);
+
+  /* 关掉次序规则 → 基底切面恢复全实心 */
+  S.orderRule = false; api.rebuild(false);
+  let offNeg = 0;
+  for (let v=0; v<api.meshBase._s.length; v++) if (api.meshBase._s[v] < 0) offNeg++;
+  check("关掉规则后基底切面不再透明", offNeg === 0, `${offNeg} 个透明顶点`);
+  S.orderRule = true; api.rebuild(false);
+
+  /* 把基底深度调大不该影响结论（只是把下沿拉得更低） */
+  S.baseDepth = 900; api.rebuild(false);
+  let bad2 = 0;
+  const mB2 = api.meshBase, z0b = api.baseZ();
+  for (let v=0; v<mB2._pos.length/3; v++) {
+    const x = mB2._pos[3*v], y = mB2._pos[3*v+1], z = mB2._pos[3*v+2];
+    if (Math.abs(z - z0b) < 1e-3) continue;
+    const a = Math.round(x/Lm*NS), bq = Math.round(y/Lm*NS);
+    if (a < 0 || a > NS || bq < 0 || bq > NS) continue;
+    const q = bq*n + a;
+    let C = Infinity;
+    for (let j=1;j<S.ifaces.length;j++) C = Math.min(C, S.ifaces[j].Z[q]);
+    if ((mB2._s[v] < 0) !== (z > C)) bad2++;
+  }
+  check("基底深度改成 900 m 后结论不变（过零位置由界面决定，不由深度决定）",
+        bad2 === 0, `不符 ${bad2} 个顶点`);
+  S.baseDepth = 250; api.rebuild(false);
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
