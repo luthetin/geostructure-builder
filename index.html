@@ -548,19 +548,22 @@ function evalIface(I) {
   }
 }
 /* 沉积次序透明规则（沿用最初的设计）：
-   交界面 i 在 (x,y) 处【透明】⟺ 存在比它高的交界面 j 在该处比它低（z_j < z_i）。
+   交界面 i 在 (x,y) 处【透明】⟺ 存在比它【年轻】的交界面 j 在该处比它低
+   （z_j < z_i）—— 即"更年轻的被压在它下面"。
 
    用【连续有符号场】而不是逐顶点 0/1 开关：
      S_i(x,y) = min over j>i of ( z_j − z_i )
-   S < 0 说明有更高的界面压在它下面 —— 叠置反了。
+   S < 0 说明有更年轻的界面在它下面 —— 叠置反了，这张面不画。
    片元在场上过零处丢弃，透明边界就精确落在两个交界面的交线上。
 
-   还要加上【对称的一半】：存在比它【老】的交界面 j 反而在它上面（z_j > z_i）。
-   这一半不是可有可无的：最上面那个交界面已经没有更高的界面了，
-   它被判透明的唯一机会就是这一条。少了它，上面那层尖灭（顶面切到下面去）之后，
-   那个顶面还会照画不误，把下面那层一直挡着 —— 看上去就是"该露下面地层的颜色，
-   显示的却还是上面地层的颜色"。
-   在叠置正常的模型里这一条永远不触发（老的本就都更低），所以不会误伤。 */
+   两张层面相交时，这条规则【只判老的透明】：老的（次序低）藏起来，
+   年轻的（次序高）照常显示 —— 相交范围内一定有一张看得见，不会两边都空。
+
+   曾经还加过对称的一半「更老的压在它上面也透明」。那是为了压住【最上面那张
+   界面】的多余薄面：地表面没有更年轻的界面，这条规则永远不触发它，于是它那张
+   薄面会一直盖在露头带的颜色上。但地表面本来就不需要一张多余的薄面 ——
+   它的面就是地表那个盖子本身（永远画、颜色按露头带），所以把那张薄面去掉之后，
+   这一半就没有存在理由了，去掉它才满足"相交时最高次序那张要显示"。 */
 function computeIfaceFields() {
   const n = S.ifaces.length;
   for (const I of S.ifaces) {
@@ -568,7 +571,7 @@ function computeIfaceFields() {
     I.S.fill(1e9);
   }
   if (!S.orderRule) return;
-  /* ①「更年轻的界面压在它下面」+ ②「更老的界面压在它上面」，取最小。
+  /* 只算「更年轻的界面压在它下面」，取最小。
      —— 这条规则只作用在【交界面那张薄面】上。地层实体不参与（见 buildStratum）。
 
      min 用【软最小值】，和岩体那条 C_k 同一个道理、同一个尺度：
@@ -579,21 +582,16 @@ function computeIfaceFields() {
   for (let i=0;i<n;i++) {
     const si = S.ifaces[i].S, zi = S.ifaces[i].Z;
     for (let q=0;q<SZ;q++) {
-      let m = Infinity;
-      for (let j=0;j<n;j++) {
-        if (j === i) continue;
-        const zj = S.ifaces[j].Z[q];
-        const d = (j > i) ? (zj - zi[q]) : (zi[q] - zj);
+      let m = Infinity, cnt = 0;
+      for (let j=i+1;j<n;j++) {                  // 只找【更年轻】的界面
+        const d = S.ifaces[j].Z[q] - zi[q];
         if (d < m) m = d;
+        cnt++;
       }
+      if (!cnt) { si[q] = 1e9; continue; }       // 最上面那张：没有更年轻的，永远画
       if (!isFinite(m)) { si[q] = 1e9; continue; }
       let sum = 0;
-      for (let j=0;j<n;j++) {
-        if (j === i) continue;
-        const zj = S.ifaces[j].Z[q];
-        const d = (j > i) ? (zj - zi[q]) : (zi[q] - zj);
-        sum += Math.exp(-(d - m)/soften);
-      }
+      for (let j=i+1;j<n;j++) sum += Math.exp(-((S.ifaces[j].Z[q] - zi[q]) - m)/soften);
       si[q] = m - soften*Math.log(sum);
     }
   }
@@ -1496,7 +1494,10 @@ function rebuild(fit) {
   computeIfaceFields();
   computeStratumFields();
   meshStrata = S.strata.map((st, k) => st.vis ? buildStratum(k) : null);
-  meshIfaces = S.ifaces.map(I => (S.showIface && I.vis) ? buildIfaceSurface(I) : null);
+  /* 最上面那张交界面【不做薄面】：它就是地表那个盖子本身（永远画、颜色按露头带）。
+     多做一张只会以 1.5 m 的高度浮在盖子上方，把露头带的颜色盖住。 */
+  meshIfaces = S.ifaces.map((I, i) =>
+    (S.showIface && I.vis && i < S.ifaces.length-1) ? buildIfaceSurface(I) : null);
   meshBase = S.showBase ? buildBase() : null;
   const A = S.ifaces[S.active];
   if (A) {

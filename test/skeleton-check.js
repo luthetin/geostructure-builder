@@ -327,22 +327,44 @@ console.log("\n─── I. 沉积次序透明规则 ───");
      地表在 x<3143 处扎到中界面以下，在 x<1429 处连下界面也扎穿。 */
   reset([(x,y)=>600, (x,y)=>1200, (x,y)=>100 + 0.35*x]);
   const ii = S.ifaces;
-  let ruleBad = 0, ruleSee = 0;
+  /* 规则只有一条（①）：存在【更年轻】的界面压在它下面 ⟹ 这张面透明。
+     两面相交时只判老的那张透明，年轻的（次序高的）照常显示 ——
+     所以永远不会出现"相交范围内两张都不见了"。 */
+  let ruleBad = 0, ruleSee = 0, bothGone = 0;
   for (let q=0;q<SZ;q++) {
     for (let i=0;i<ii.length;i++) {
       let want = false;
-      for (let j=0;j<ii.length;j++) {
-        if (j === i) continue;
-        if (j > i && ii[j].Z[q] < ii[i].Z[q]) want = true;   // ① 更年轻的压在它下面
-        if (j < i && ii[j].Z[q] > ii[i].Z[q]) want = true;   // ② 更老的压在它上面
-      }
+      for (let j=i+1;j<ii.length;j++)
+        if (ii[j].Z[q] < ii[i].Z[q]) { want = true; break; }
       if ((ii[i].S[q] < 0) !== want) ruleBad++;
       if (want) ruleSee++;
     }
   }
-  check("交界面的透明判据逐点等于定义（①更年轻的压在下面 ＋ ②更老的压在上面）",
+  check("交界面的透明判据逐点等于定义（更年轻的压在它下面 ⟹ 透明）",
         ruleBad === 0, `${ruleSee} 个点应透明，不符 ${ruleBad}`);
   check("透明规则确实在起作用（不是全部不透明）", ruleSee > 0, `${ruleSee} 个透明点`);
+
+  /* 【关键行为】两条：
+     ① 相交处【老的那张一定透明】（次序低的让位）；
+     ② 最上面那张【永远画】—— 它没有更年轻的界面，规则不触发它，
+        这正是"相交时最高次序那张要显示"。 */
+  {
+    let cross = 0, oldShown = 0;
+    for (let q=0;q<SZ;q++) {
+      for (let i=0;i<ii.length;i++) for (let j=i+1;j<ii.length;j++) {
+        if (ii[j].Z[q] >= ii[i].Z[q]) continue;       // j 更年轻却更低 = 相交
+        cross++;
+        if (ii[i].S[q] >= -1e-9) oldShown++;
+      }
+    }
+    check("相交处【老的那张一定透明】（次序低的让位）",
+          cross > 0 && oldShown === 0, `${cross} 处相交，老的那张还画着 ${oldShown} 处`);
+    const last = ii[ii.length-1];
+    let hidden = 0;
+    for (let q=0;q<SZ;q++) if (last.S[q] < 0) hidden++;
+    check("最上面那张交界面永远不被判透明（它就是地表那个盖子，颜色按露头带）",
+          hidden === 0, `${hidden} 个点被判透明`);
+  }
 
   /* 【交界面这条也用软最小值】—— 和岩体那条 C_k 同一个道理、同一个尺度。
      硬 min 在"最小值换主人"处会折一下，丢边界跟着拐；软 min 光滑，而且恒 ≤ 硬 min，
@@ -355,11 +377,11 @@ console.log("\n─── I. 沉积次序透明规则 ───");
       const zi = ii[i].Z, Sf = ii[i].S;
       for (let q=0;q<SZ;q++) {
         let m = Infinity, cnt = 0;
-        for (let j=0;j<ii.length;j++) {
-          if (j === i) continue;
-          const d = (j > i) ? (ii[j].Z[q] - zi[q]) : (zi[q] - ii[j].Z[q]);
+        for (let j=i+1;j<ii.length;j++) {          // 只找更年轻的
+          const d = ii[j].Z[q] - zi[q];
           if (d < m) m = d; cnt++;
         }
+        if (!cnt) continue;                        // 最上面那张：没有更年轻的，恒为 1e9
         if (!isFinite(m)) continue;
         if (Sf[q] - m > 1e-3*Math.max(1, Math.abs(m))) { over++; worstOver = Math.max(worstOver, Sf[q]-m); }
         if (m >= 0 && Sf[q] < 0) {                      // 定义说该画、软场却透 -> 多透的那部分
@@ -517,7 +539,9 @@ console.log("\n─── I2. 交界面薄面（有自己的颜色与透明度）
 {
   reset([(x,y)=>400, (x,y)=>700]);
   const list = api.meshIfaces.filter(Boolean);
-  check("每个可见交界面都生成了薄面网格", list.length === 2, `${list.length} 个`);
+  check("每张交界面都有薄面网格，除了【最上面那张】—— 它就是地表那个盖子本身",
+        list.length === S.ifaces.length-1 && api.meshIfaces[S.ifaces.length-1] === null,
+        `${list.length} 个（界面共 ${S.ifaces.length} 个）`);
   const m = api.meshIfaces[0];
   check("薄面顶点数 = 网格点数", m._pos.length/3 === SZ, `${m._pos.length/3}`);
   check("薄面颜色 = 该交界面的颜色",
@@ -1288,6 +1312,5 @@ console.log("\n─── I5. 基底（底平面 ↔ 最下面那个界面之间�
   check("基底深度改成 900 m 后结论不变", bad2 === 0, `不符 ${bad2} 个顶点`);
   S.baseDepth = 250; api.rebuild(false);
 }
-
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);
