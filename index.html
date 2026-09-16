@@ -634,32 +634,37 @@ function buildStratum(k) {
          厚度为负时底面也判负 → 整层消失
        · 地表之上不许有东西：C_k ≤ 地表高程（地表是 i>k 里的一员），
          顶点高过地表就判负 → 剪掉
-     因为 C 是连续的，所有边界（尖灭线、裁剪线）都精确落在界面的交线上。 */
-  /* 地表面 = 所有界面的【上包络】：env(x,y) = max over 全部界面 of z_j
-     这是露头带的来源 —— 每一条带就是某个界面正好成为包络的那片区域，
-     带与带的分界就是两条界面的交线。 */
-  const env = new Float32Array(SZ);
+  /* 【岩石】的场 = min( C_k − 顶点高程 , 本层厚度 )
+       C_k(x,y) = min over i>k of （界面 i 的高程）  比本层年轻的界面里最低的那个
+     —— 这就是"一个界面之上只能显示层序更高的岩层"。不该显示的（高过 C_k 的）
+     以及本层尖灭的部分，一律不画。面（顶/底面）和剖面（侧壁）都用这一条。 */
+  const C = new Float32Array(SZ);
   for (let q=0;q<SZ;q++) {
-    let hi = -Infinity;
-    for (const I of S.ifaces) { const z = I.Z[q]; if (z > hi) hi = z; }
-    env[q] = isFinite(hi) ? hi : top.Z[q];
+    let lo = Infinity;
+    for (let i=k+1;i<S.ifaces.length;i++) { const z = S.ifaces[i].Z[q]; if (z < lo) lo = z; }
+    C[q] = isFinite(lo) ? lo : bot.Z[q];
   }
   const thickAt = q => top.Z[q] - bot.Z[q];
-  /* 【面】的场 = min( 地表面高程 − 顶点高程 , 本层厚度 )
-       前一项：这张面高过地表面就没有意义（那时它在岩石内部，是"地表层之上那东西"的根源）
-       后一项：本层尖灭了，这张面也就不存在
-     两个端点都是连续的，所以带边界精确落在交线上。 */
-  const capAt = (q, z) => {
+  const fieldAt = (q, z) => {
     if (!S.orderRule) return 1e9;
-    const a = env[q] - z, t = thickAt(q);
+    const a = C[q] - z, t = thickAt(q);
     return a < t ? a : t;
   };
-  /* 【侧壁】的场 = 本层厚度 —— 剖面按岩层实际产状画满。
-     侧壁是剖面：规则让"面上方的东西"透明，但面本身、以及面之间的岩石
-     要正常显示，否则剖面上会空掉一块（实测过：97 列里 45 列有洞、占总高 24.6%）。
-     再没有别的裁剪：本层的上下界面都在上包络之下，所以侧壁不会冒出去。 */
-  const wallAt = (q) => S.orderRule ? thickAt(q) : 1e9;
-  const fieldAt = capAt;
+  /* 【地表面】是最上面那个界面本身，它不是一个"岩层" —— 面上方的东西透明，
+     面自己永远正常显示。它的颜色按【露头带】给：
+     取"底面高程 ≤ 地表高程"的层里最上面那一层（也就是地表正下方压着的那一层），
+     一层都没有就是基底。带与带的分界自然落在各界面与地表的交线上。 */
+  const isLid = (top === S.ifaces[S.ifaces.length-1]);
+  const topIfaceZ = isLid ? top.Z : null;
+  const exposedColor = (q) => {
+    const zs = topIfaceZ[q];
+    let best = -1, bestZ = -Infinity;
+    for (let j=0;j<S.strata.length;j++) {
+      const zk = S.ifaces[j].Z[q];              // 第 j 层的【底面】高程
+      if (zk <= zs + 1e-3 && zk > bestZ) { bestZ = zk; best = j; }
+    }
+    return best < 0 ? S.baseColor.map(v=>v/255) : S.strata[best].color.map(v=>v/255);
+  };
   let kref = 1e-12;
   if (S.curv) {
     const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
@@ -683,13 +688,15 @@ function buildStratum(k) {
                             : S.baseColor.map(v=>v/255);
   const botCapColor = (K) => capColorOf(baseBelow, K);
 
-  /* ---- 顶面：法线朝上，从上方看是逆时针 ---- */
+  /* ---- 顶面：法线朝上，从上方看是逆时针 ----
+     最上面那个界面的顶面就是【地表面】本身：面永远正常显示，颜色按露头带。 */
   for (let b=0;b<n;b++) for (let a=0;a<n;a++) {
-    const q=b*n+a, c = capColor(top.K[q]);
+    const q=b*n+a;
+    const c = isLid ? capColorOf(exposedColor(q), top.K[q]) : capColor(top.K[q]);
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(fieldAt(q, top.Z[q]));
+    sA.push(isLid ? 1e9 : fieldAt(q, top.Z[q]));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -721,10 +728,11 @@ function buildStratum(k) {
       const at = pos.length/3;
       pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
       pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
-      /* 侧壁用【本层厚度】：本层存在就整条实心，剖面不挖洞。
-         规则只管"面上方的东西"，面本身和面之间的岩石要正常显示。 */
-      const t1 = wallAt(q1), t2 = wallAt(q2);
-      const th = [t1, t2, t2, t1, t2, t1];
+      /* 【剖面（侧壁）和面用同一条规则】：不该显示的岩体，在剖面上同样不画。
+         规则是"一个界面之上只能出现层序更高的岩层"，岩体自己也不例外 ——
+         高过 C_k 的那一截不显示。代价是剖面上会留下空档（宽的是洞，细的是缝）。 */
+      const th = [fieldAt(q1, zb1), fieldAt(q2, zb2), fieldAt(q2, zt2),
+                  fieldAt(q1, zb1), fieldAt(q2, zt2), fieldAt(q1, zt1)];
       for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }
@@ -741,7 +749,11 @@ function buildStratum(k) {
   return mesh(pos,nrm,col,idx, sA);
 }
 /* 交界面本身也画出来（半透明薄面），带自己的颜色和透明度。
-   沿法线抬高 1.5 m，免得和地层的顶/底面打架（z-fighting）。 */
+   沿法线抬高 1.5 m，免得和地层的顶/底面打架（z-fighting）。
+
+   【每一张层面都是完整的】：不受"一个界面之上只能有层序更高的岩层"那条规则约束，
+   整片都画出来。那条规则管的是【岩石】；面是面 —— 面上方的东西透明，面自己正常显示。
+   这样每个层面都是一张完整的面，调它的透明度就能看清层面与层面之间的空间关系。 */
 function buildIfaceSurface(I) {
   const Lm = mapL(), n = NS+1;
   const pos=[], nrm=[], col=[], idx=[], sA=[];
@@ -751,7 +763,7 @@ function buildIfaceSurface(I) {
     pos.push(Lm*a/NS + I.NX[q]*1.5, Lm*b/NS + I.NY[q]*1.5, I.Z[q] + I.NZ[q]*1.5);
     nrm.push(I.NX[q], I.NY[q], I.NZ[q]);
     col.push(base[0],base[1],base[2],1);
-    sA.push(I.S[q]);
+    sA.push(1e9);
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -775,12 +787,7 @@ function buildBase() {
   const Lm = mapL(), n = NS+1, z0 = baseZ();
   const pos=[], nrm=[], col=[], idx=[], sA=[];
   const c = S.baseColor.map(v=>v/255);
-  /* 该柱上所有界面里最低的那个高程：基底的上界 */
-  const cminAt = (q) => {
-    let lo = Infinity;
-    for (const I of S.ifaces) if (I.Z && I.Z[q] < lo) lo = I.Z[q];
-    return isFinite(lo) ? lo : bot.Z[q];
-  };
+
   const quad = (pts, nx, ny, nz, sArr) => {
     const at = pos.length/3;
     for (let t=0;t<pts.length;t++) {
@@ -796,25 +803,19 @@ function buildBase() {
       const q1=list[t], q2=list[t+1];
       const x1=Lm*(q1%n)/NS, y1=Lm*((q1/n)|0)/NS;
       const x2=Lm*(q2%n)/NS, y2=Lm*((q2/n)|0)/NS;
-      /* 基底的切面【必须参与规则】，否则交界面上有更高的界面压下来时，
-         上面的地层会一直探到基底的深度范围里，两张切面共面重叠 ——
-         看上去就是一片竖条纹的 z-fighting（蓝的和基底的深棕色叠在一起）。
-         这里同样是同一条直线 f(z) = Cmin − z：
-             Cmin = 该柱上【所有界面里最低的那个】高程
-             f 在 z = Cmin 处过零，也就是【Cmin 以上的那截基底切面被丢掉】
-             —— 正好是被上面地层占住的那一截。
-         直接用几何上的 Cmin 而不是 ifaces[0] 的场：那个场现在会因为
-         "最高的界面永不透明"的约束被抬成正数，拿它算会被带偏。
-         叠置正常时 Cmin 就是 ifaces[0] 自己，上沿场恰好是 0 → 保持实心。 */
-      /* 关掉规则开关时，基底也恢复全实心（代价是共面重叠的 z-fighting 会回来，
-         那本来就是"关掉规则"应有的样子）。 */
-      const cq1 = cminAt(q1), cq2 = cminAt(q2);
+      /* 基底的剖面同样按规则裁：只画到【该柱上所有界面里最低的那个】为止。
+         再往上就被上面的岩层占住了，硬画会变成共面重叠的 z-fighting 竖条纹。 */
+      let lo1 = Infinity, lo2 = Infinity;
+      for (const I of S.ifaces) {
+        if (I.Z[q1] < lo1) lo1 = I.Z[q1];
+        if (I.Z[q2] < lo2) lo2 = I.Z[q2];
+      }
       const on = S.orderRule;
-      const t1 = on ? cq1 - bot.Z[q1] : 1e9, t2 = on ? cq2 - bot.Z[q2] : 1e9;
-      const b1 = on ? cq1 - z0         : 1e9, b2 = on ? cq2 - z0         : 1e9;
+      const b1 = on ? lo1 - z0 : 1e9, b2 = on ? lo2 - z0 : 1e9;
       quad([[x1,y1,z0],[x2,y2,z0],[x2,y2,bot.Z[q2]],
             [x1,y1,z0],[x2,y2,bot.Z[q2]],[x1,y1,bot.Z[q1]]], nx, ny, 0,
-           [b1, b2, t2, b1, t2, t1]);
+           [b1, b2, on ? lo2 - bot.Z[q2] : 1e9, b1, on ? lo2 - bot.Z[q2] : 1e9,
+            on ? lo1 - bot.Z[q1] : 1e9]);
     }
   };
   const south=[], north=[], west=[], east=[];
