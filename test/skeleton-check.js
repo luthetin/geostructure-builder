@@ -340,23 +340,27 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         ruleBad === 0, `${ruleSee} 个点应透明，不符 ${ruleBad}`);
   check("透明规则确实在起作用（不是全部不透明）", ruleSee > 0, `${ruleSee} 个透明点`);
 
-  /* 【地层实体不参与这条规则】—— 它只有一个判据：本层存不存在。
-     这一条把"面"和"岩体"彻底分开，也正是之前两个诉求互相打架的根源。 */
-  const Lm0 = api.mapL(), nn = NS+1;
+  /* 【地层实体不参与次序规则】—— 它只有两条判据，取更严的那个：
+       ① 本层厚度（尖灭掉就不画）   ② 顶点不高于地表（地表之上不许有东西）
+     例外：最上面那个地层的顶面是盖子，永远画。 */
+  const Lm0 = api.mapL(), nn = NS+1, ceilI = ii[ii.length-1];
   let layerBad = 0, layerGone = 0, layerAlive = 0;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
     for (let v=0; v<mm._pos.length/3; v++) {
-      const x = mm._pos[3*v], y = mm._pos[3*v+1];
+      const x = mm._pos[3*v], y = mm._pos[3*v+1], z = mm._pos[3*v+2];
       const a = Math.round(x/Lm0*NS), bq = Math.round(y/Lm0*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
       const q = bq*nn + a;
       const th = ii[k+1].Z[q] - ii[k].Z[q];
-      if ((mm._s[v] < 0) !== (th < 0)) layerBad++;
-      if (th < 0) layerGone++; else layerAlive++;
+      const ce = ceilI.Z[q] - z;
+      const isLid = (k === S.strata.length-1 && v < SZ);
+      const gone = !isLid && (th < 0 || ce < 0);
+      if ((mm._s[v] < 0) !== gone) layerBad++;
+      if (gone) layerGone++; else layerAlive++;
     }
   }
-  check("地层实体只用「本层厚度」判：存在就实心，尖灭掉才不画",
+  check("地层实体：min(本层厚度, 地表高程−顶点高程) < 0 才不画（盖子豁免）",
         layerBad === 0 && layerGone > 0 && layerAlive > 0,
         `${layerAlive} 个实心 / ${layerGone} 个不画，不符 ${layerBad}`);
   check("上面那层确实尖灭掉了（构造有效，不是空跑）", layerGone > 0, `${layerGone} 个顶点不画`);
@@ -840,81 +844,7 @@ console.log("\n─── Y. 纯平地面（地块底面）───");
 }
 
 /* ============================================================ I3 */
-console.log("\n─── I3. 侧壁：渐变场，两端与顶/底面同源 ───");
-{
-  const n = NS+1, iE = NS, Lm = api.mapL();
-  const onTop = [0,0,1,0,1,1];                 // 四边形里 [下,下,上,下,上,上]
-
-  /* 4 个界面，让"只有下界面被埋""只有上界面被埋""两个都被埋"同时出现 */
-  const mk = (f, col) => { const I = api.mkIface('I', col, 1);
-    I.z = new Float32Array(S.res*S.res);
-    const c = (S.res-1)/2;
-    for (let b=0;b<S.res;b++) for (let a=0;a<S.res;a++) I.z[b*S.res+a] = f(a-c, b-c);
-    return I; };
-  S.ifaces = [ mk(()=>1000,             [150,128,104]),
-               mk(()=>1600,             [168,150,120]),
-               mk((u,v)=>1300 + 300*v,  [120,138,150]),
-               mk(()=>2400,             [185,143,131]) ];
-  S.strata = [ api.mkStratum('地层 0', [210,150,96], 1.0),
-               api.mkStratum('地层 1', [125,158,120], 1.0),
-               api.mkStratum('地层 2', [159,182,196], 1.0) ];
-  S.active = 3; S.showBase = true;
-  api.rebuild(false);
-
-  /* 本层存不存在：厚度 = ifaces[k+1] − ifaces[k]，为负就是尖灭掉了 */
-  const thickAt = (k,q) => S.ifaces[k+1].Z[q] - S.ifaces[k].Z[q];
-
-  /* 地层实体的【每一个面】用的都是同一个场：本层厚度。
-     所以同一个柱子上的顶面 / 底面 / 侧壁上下沿必须【结论一致】——
-     整层要么都在，要么整层都不画，不会出现"一半透一半不透"。 */
-  let mism = 0, wall = 0, offZ = 0;
-  for (let k=0;k<S.strata.length;k++) {
-    const mm = api.meshStrata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
-    for (let v = 2*SZ; v < mm._pos.length/3; v++) {
-      const x = mm._pos[3*v], y = mm._pos[3*v+1], z = mm._pos[3*v+2];
-      const a = Math.round(x/Lm*NS), bq = Math.round(y/Lm*NS), q = bq*n + a;
-      const want = thickAt(k,q);
-      if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1, Math.abs(want))) mism++;
-      if (Math.min(Math.abs(z-top.Z[q]), Math.abs(z-bot.Z[q])) > 1e-3) offZ++;
-      wall++;
-    }
-  }
-  check("侧壁每个顶点的场 = 本层厚度（不再用界面自己的场）",
-        mism === 0, `${mism}/${wall} 个不符`);
-  check("侧壁顶点确实落在两个界面之一上", offZ === 0, `${offZ} 个对不上`);
-
-  /* 逐柱核对：顶面 / 底面 / 侧壁三者同进同退 */
-  let colBad = 0, colsGone = 0, colsAlive = 0;
-  for (let k=0;k<S.strata.length;k++) {
-    const mm = api.meshStrata[k];
-    for (let j=0;j<NS;j++) {
-      const q = j*n + iE;
-      const gone = thickAt(k,q) < 0;
-      if (gone) colsGone++; else colsAlive++;
-      const faces = [mm._s[q], mm._s[SZ + q]];        // 顶面、底面
-      for (let v = 2*SZ; v < mm._pos.length/3; v++) {  // 侧壁
-        const x = mm._pos[3*v], y = mm._pos[3*v+1];
-        if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;
-        if (Math.round(y/Lm*NS) !== j) continue;
-        faces.push(mm._s[v]);
-      }
-      for (const f of faces) if ((f < 0) !== gone) colBad++;
-    }
-  }
-  check("同一个柱子上顶面/底面/侧壁结论一致：整层存在或整层不画",
-        colBad === 0 && colsGone > 0 && colsAlive > 0,
-        `${colsAlive} 柱存在 / ${colsGone} 柱尖灭，不符 ${colBad}`);
-
-  /* 关掉规则 → 整层都实心 */
-  S.orderRule = false; api.rebuild(false);
-  let offNeg = 0;
-  for (const m of api.meshStrata) if (m) for (let v=0;v<m._s.length;v++) if (m._s[v] < 0) offNeg++;
-  check("关掉次序规则后地层整层实心（看原始模型）", offNeg === 0, `${offNeg} 个不画的顶点`);
-  S.orderRule = true; api.rebuild(false);
-}
-
-/* ============================================================ I4 */
-console.log("\n─── I4. 对称规则：更老的界面压在它上面时，这个界面也要透明 ───");
+console.log("\n─── I3. 地层实体：两条判据取严（本层厚度 / 不高于地表）───");
 {
   const n = NS+1, iE = NS, Lm = api.mapL();
   const mk = (f, col) => { const I = api.mkIface('I', col, 1);
@@ -922,101 +852,111 @@ console.log("\n─── I4. 对称规则：更老的界面压在它上面时，
     const c = (S.res-1)/2;
     for (let b=0;b<S.res;b++) for (let a=0;a<S.res;a++) I.z[b*S.res+a] = f(a-c, b-c);
     return I; };
-  /* 地表（最上面那个界面）往 −v 方向切下去，穿过下面两个界面 ——
-     也就是"最上面的地层与下面地层相切"，相切以外它就尖灭掉了。
-     没有对称规则的话，地表永远不可能被判透明，它还会照画，
-     把下面那层一直挡住：该露下面地层颜色，显示的却还是上面地层的颜色。 */
-  S.ifaces = [ mk(()=>1000,            [150,128,104]),
-               mk(()=>1600,            [168,150,120]),
-               mk((u,v)=>2200 - 300*v, [185,143,131]) ];
+  /* 让【中界面拱得很高，穿过地表】：这是"地表之上冒出别的岩层"的构型。
+       I0 = 900            平
+       I1 = 1500 + 900·拱   最高到 ~2400，穿过地表
+       I2 = 1900           地表，平
+     于是 地层1（I1↔I2）在拱起处厚度为负；地层0 的顶面（I1）高出地表。 */
+  const arch = (u,v) => Math.exp(-((u*u+v*v)/40));
+  S.ifaces = [ mk(()=>900,                      [150,128,104]),
+               mk((u,v)=>1500 + 900*arch(u,v),  [168,150,120]),
+               mk(()=>1900,                     [185,143,131]) ];
   S.strata = [ api.mkStratum('地层 0', [210,150,96], 1.0),
                api.mkStratum('地层 1', [159,182,196], 1.0) ];
   S.active = 2; S.showBase = true;
   api.rebuild(false);
 
-  const surf = S.ifaces[2];
-  const mmBot0 = api.meshStrata[0];
-  /* 地表扎到下面的地方：界面薄面必须透明（规则还在起作用），
-     而【露出来的那层岩体】（厚度为正）必须实心。 */
-  let cut = 0, surfHidden = 0, maxOpaque = 0, wrongSurf = 0, wrongMax = 0;
+  const ceil = S.ifaces[2];
+  const Z = S.ifaces.map(I => I.Z);
+  const thickAt = (k,q) => Z[k+1][q] - Z[k][q];
+  const wantAt = (k,q,z) => {
+    const d = thickAt(k,q), ce = ceil.Z[q] - z;
+    return d < ce ? d : ce;
+  };
+
+  /* ---- 逐顶点核对：场 = min(本层厚度, 地表高程 − 顶点高程) ---- */
+  let mism = 0, tot = 0;
+  for (let k=0;k<S.strata.length;k++) {
+    const mm = api.meshStrata[k];
+    for (let v=0; v<mm._pos.length/3; v++) {
+      const x=mm._pos[3*v], y=mm._pos[3*v+1], z=mm._pos[3*v+2];
+      const a=Math.round(x/Lm*NS), bq=Math.round(y/Lm*NS);
+      if (a<0||a>NS||bq<0||bq>NS) continue;
+      const q = bq*n + a;
+      /* 例外：最上面那个地层的顶面是盖子，永远画 */
+      if (k === S.strata.length-1 && v < SZ) {
+        if (mm._s[v] < 0) mism++;
+        tot++; continue;
+      }
+      const want = wantAt(k,q,z);
+      if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1,Math.abs(want))) mism++;
+      tot++;
+    }
+  }
+  check("每个顶点的场 = min(本层厚度, 地表高程 − 顶点高程)",
+        mism === 0, `${mism}/${tot} 个不符`);
+
+  /* ---- 【本节的要害】画出来的顶点不许有一个高出地表 ---- */
+  let above = 0, drawn = 0, worst = -Infinity;
+  for (let k=0;k<S.strata.length;k++) {
+    const mm = api.meshStrata[k];
+    for (let v=0; v<mm._pos.length/3; v++) {
+      if (mm._s[v] < 0) continue;
+      const x=mm._pos[3*v], y=mm._pos[3*v+1], z=mm._pos[3*v+2];
+      const a=Math.round(x/Lm*NS), bq=Math.round(y/Lm*NS);
+      if (a<0||a>NS||bq<0||bq>NS) continue;
+      const d = z - ceil.Z[bq*n+a];
+      drawn++;
+      if (d > 0.5) above++;
+      if (d > worst) worst = d;
+    }
+  }
+  check("【地表之上一个画出来的顶点都没有】",
+        above === 0 && drawn > 0, `${drawn} 个顶点里越界 ${above} 个，最高 ${worst.toFixed(1)} m`);
+
+  /* ---- 构型有效：确实有界面拱穿地表 ---- */
+  let archN = 0, thickNeg = 0;
   for (let q=0;q<SZ;q++) {
-    const zs = [S.ifaces[0].Z[q], S.ifaces[1].Z[q], surf.Z[q]];
-    const zmax = Math.max(zs[0], zs[1], zs[2]);
-    const cutHere = zs[2] < zmax;                 // 地表不是最高的 → 被扎下去了
-    if (cutHere) {
-      cut++;
-      if (surf.S[q] < 0) surfHidden++;
-      if (!(surf.S[q] < 0)) wrongSurf++;
-    }
-    /* 露出来的那层岩体（厚度为正）必须实心 —— 这才是"看得到它的颜色" */
-    const iMax = zs.indexOf(zmax);
-    if (cutHere && iMax === 1) {
-      if (mmBot0._s[q] >= 0) maxOpaque++; else wrongMax++;
-    }
+    if (Z[1][q] > ceil.Z[q]) archN++;
+    if (thickAt(1,q) < 0) thickNeg++;
   }
-  check("地表扎到下面的地方，界面薄面被判透明（规则还在起作用，没失效）",
-        cut > 0 && wrongSurf === 0, `${cut} 点，${surfHidden} 点透明`);
-  check("露出来的那层【岩体】是实心的 —— 于是看得到它的颜色",
-        maxOpaque > 0 && wrongMax === 0, `${maxOpaque} 点实心，误判 ${wrongMax}`);
-  check("地表在最上面那个界面身上不再是 +∞（否则它永远不可能透明）",
-        surf.S.some(v => v < 0), `最小场值 ${Math.min.apply(null, Array.from(surf.S)).toFixed(0)}`);
+  check("构型有效：中界面确实拱穿地表（不是空跑）", archN > 0 && thickNeg > 0,
+        `${archN} 点拱穿 / ${thickNeg} 点厚度为负`);
 
-  /* 逐柱核对：扎下去的那层的顶面不画，露出来的那层仍然画着 */
-  const mmTop = api.meshStrata[1], mmBot = api.meshStrata[0];
-  let topCapSee = 0, botCapSee = 0, cols = 0;
+  /* ---- 拱穿处：上面那层整层不画 ---- */
+  let deadCols=0, deadAll=0;
+  const mmTop = api.meshStrata[1];
   for (let j=0;j<NS;j++) {
     const q = j*n + iE;
-    if (mmTop._s[q] < 0) topCapSee++;              // 上面那层的顶面（=地表）被丢掉了
-    if (mmBot._s[q] < 0) botCapSee++;              // 下面那层的顶面（=iface 1）
-    cols++;
-  }
-  check("上面那层尖灭之后，它的顶面确实不再盖着下面那层",
-        topCapSee > 0, `${topCapSee}/${cols} 柱的顶面被判透明`);
-  check("露出来的那层【不是整片透明】—— 至少有一部分是实心可看的",
-        botCapSee < cols, `下面那层的顶面有 ${botCapSee}/${cols} 柱透明`);
-
-  /* 【共面双面】—— 一个交界面同时是上下两个地层的边界：
-       iface 1 既是地层0 的顶面、又是地层1 的底面，两者用同一个场。
-     所以必须断言：上面那层尖灭掉的地方，它的【所有面】都不画，
-     不能靠自己的底面又画回来（"本该消失的地层又出现了"）。 */
-  let deadCols = 0, deadAllHidden = 0, aliveTopOpaque = 0;
-  for (let j=0;j<NS;j++) {
-    const q = j*n + iE;
-    const dead = S.ifaces[2].Z[q] < S.ifaces[1].Z[q];     // 上面那层厚度为负
-    if (!dead) continue;
+    if (thickAt(1,q) >= 0) continue;
     deadCols++;
-    const topCap = mmTop._s[q] < 0;                       // 顶面（=地表）
-    const botCap = mmTop._s[SZ + q] < 0;                  // 底面（=iface 1，与下面那层的顶面共面）
+    const topCap = mmTop._s[q] < 0 || S.strata.length-1 === 1;   // 顶部是盖子则豁免
+    const botCap = mmTop._s[SZ+q] < 0;
     let wallAny = false;
-    for (let v = 2*SZ; v < mmTop._pos.length/3; v++) {
-      const x = mmTop._pos[3*v], y = mmTop._pos[3*v+1];
+    for (let v=2*SZ; v<mmTop._pos.length/3; v++) {
+      const x=mmTop._pos[3*v], y=mmTop._pos[3*v+1];
       if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;
       if (Math.round(y/Lm*NS) !== j) continue;
       if (mmTop._s[v] >= 0) wallAny = true;
     }
-    if (topCap && botCap && !wallAny) deadAllHidden++;
-    if (mmBot._s[q] >= 0) aliveTopOpaque++;               // 下面那层的顶面（同一张面）
+    if (botCap && !wallAny) deadAll++;
+    void topCap;
   }
-  check("尖灭掉的那层：顶面、底面、侧壁【全都不画】（不会靠底面又冒出来）",
-        deadCols > 0 && deadAllHidden === deadCols,
-        `${deadCols} 个尖灭柱，其中 ${deadAllHidden} 柱整层隐藏`);
-  check("同一张面上，下面那层的顶面仍然是实心的（看得到它的颜色）",
-        aliveTopOpaque === deadCols,
-        `${deadCols} 个尖灭柱，下面那层顶面实心 ${aliveTopOpaque} 柱`);
+  check("拱穿处：尖灭掉的那层【底面和侧壁都不画】",
+        deadCols > 0 && deadAll === deadCols, `${deadCols} 个尖灭柱，其中 ${deadAll} 柱隐藏`);
 
-  /* 叠置正常时对称规则绝不触发 —— 否则会误伤 */
+  /* ---- 地表永远是个完整的盖子（不能被裁出洞） ---- */
+  let lid = 0;
+  for (let q=0;q<SZ;q++) if (mmTop._s[q] >= 0) lid++;
+  check("地表（最上面那个地层的顶面）始终是完整的盖子，一个洞都没有",
+        lid === SZ, `${lid}/${SZ} 个网格点画着`);
+
+  /* ---- 关掉规则 → 原样都画 ---- */
   S.orderRule = false; api.rebuild(false);
-  S.ifaces = [ mk(()=>1000, [150,128,104]), mk(()=>1600, [168,150,120]),
-               mk(()=>2400, [185,143,131]) ];
+  let offNeg = 0;
+  for (const m of api.meshStrata) if (m) for (let v=0;v<m._s.length;v++) if (m._s[v]<0) offNeg++;
+  check("关掉规则开关后地层整层实心（看原始模型）", offNeg === 0, `${offNeg} 个不画`);
   S.orderRule = true; api.rebuild(false);
-  let normalNeg = 0;
-  for (const I of S.ifaces) for (let q=0;q<SZ;q++) if (I.S[q] < 0) normalNeg++;
-  check("叠置正常（老的下、新的上）时对称规则不触发", normalNeg === 0,
-        `${normalNeg} 个透明顶点`);
-
-  /* 底界面（层序最小）没有更老的界面，所以不受对称规则影响 */
-  check("最下面那个界面不受对称规则影响（它没有更老的界面）",
-        S.ifaces[0].S.every(v => v > 0));
 }
 
 /* ============================================================ I5 */

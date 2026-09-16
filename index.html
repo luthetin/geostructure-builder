@@ -624,9 +624,28 @@ function buildStratum(k) {
   const Lm = mapL(), n = NS+1, NSq = NS*NS;
   const pos=[], nrm=[], col=[], idx=[], sA=[];
   const base = st.color.map(v=>v/255);
+  /* 地层实体的判据有两条，取更严的那个：
+
+     ① 本层存不存在：厚度 = 上面那个界面的高程 − 下面那个界面的高程
+          厚度 ≥ 0 → 存在 → 实心；厚度 < 0 → 尖灭掉了 → 整层不画
+
+     ② 【地表之上不许有东西】：某个更深的界面拱穿了地表时，夹着它的老地层
+        会探到地表之上，看上去就是"地表层上面冒出了别的岩层"。
+        所以每个顶点再和 (地表高程 − 顶点自身高程) 取 min：
+        高出地表的顶点直接判负 → 那片被裁掉，模型的上界严格就是地表。
+
+     两条都是连续场，过零处丢弃，所以尖灭边界和裁剪边界都精确落在交线上。
+     关掉规则开关 = 看原始模型，两条都不生效。 */
+  const ceil = S.ifaces[S.ifaces.length-1];        // 最上面那个界面 = 地表
+  /* 最上面那个地层的顶面【就是地表本身】—— 它是模型的盖子，永远要画。
+     少了它，深部界面拱穿地表的那片会在地表上留下一个洞，从上面直接看进模型内部。 */
+  const isLid = (top === ceil);
   const thick = q => top.Z[q] - bot.Z[q];
-  /* 关掉规则开关 = 看原始模型，什么都不藏 */
-  const layerF = q => S.orderRule ? thick(q) : 1e9;
+  const fieldAt = (q, z) => {
+    if (!S.orderRule) return 1e9;
+    const d = thick(q), ce = ceil.Z[q] - z;
+    return d < ce ? d : ce;
+  };
   let kref = 1e-12;
   if (S.curv) {
     const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
@@ -645,7 +664,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(layerF(q));
+    sA.push(isLid ? 1e9 : fieldAt(q, top.Z[q]));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -659,7 +678,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, bot.Z[q]);
     nrm.push(-bot.NX[q], -bot.NY[q], -bot.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(layerF(q));
+    sA.push(fieldAt(q, bot.Z[q]));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -677,11 +696,10 @@ function buildStratum(k) {
       const at = pos.length/3;
       pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
       pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
-      /* 侧壁同样只用【本层厚度】：本层存在就实心，尖灭掉就整条不画。
-         厚度沿柱子的走向是连续的，所以尖灭边界精确落在相切线上，
-         侧壁在相切处自然收拢收成零宽，不会留下一截孤零零的墙。 */
-      const th = [layerF(q1), layerF(q2), layerF(q2),
-                  layerF(q1), layerF(q2), layerF(q1)];
+      /* 侧壁同样两条判据，而且要逐顶点算：裁剪边界可能落在柱子的中间，
+         高出地表的那一截要被切掉，剩下的仍然实心。 */
+      const th = [fieldAt(q1, zb1), fieldAt(q2, zb2), fieldAt(q2, zt2),
+                  fieldAt(q1, zb1), fieldAt(q2, zt2), fieldAt(q1, zt1)];
       for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }
