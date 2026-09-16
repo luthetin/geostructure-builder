@@ -321,19 +321,29 @@ console.log("\n─── I. 沉积次序透明规则 ───");
 
   reset([(x,y)=>600, (x,y)=>600 + 0.25*x - 500]);
   const bot = S.ifaces[0], top = S.ifaces[1];
-  let mismatch = 0, negI = 0, negS = 0, falsePos = 0;
+  let mismatch = 0, negI = 0, falsePos = 0;
   for (let q=0;q<SZ;q++) {
     const shouldBeTransparent = (top.Z[q] < bot.Z[q]);   // 更高的界面压到了它下面
     if ((bot.S[q] < 0) !== shouldBeTransparent) mismatch++;
     if (bot.S[q] < 0) negI++;
-    if (S.strata[0].S[q] < 0) negS++;
     if (top.S[q] < 0) falsePos++;                        // 最上面那个界面不该被判定透明
   }
   check("交界面的透明判据逐点等于定义：∃ 更高的界面压在其下",
         mismatch === 0, `${SZ} 点中 ${negI} 点应透明，不符 ${mismatch}`);
-  check("交界面透明的地方，夹着它的地层也一起透明",
-        negS === negI && negI > 0, `界面透明 ${negI} 点 / 地层透明 ${negS} 点`);
-  check("地层的场 = 上下两界面场的较小者",
+
+  /* 级联要【看渲染出来的东西】，不能看那个统计用的 st.S。
+     顶点顺序：0..SZ-1 是顶面（依附 top），SZ..2SZ-1 是底面（依附 bot）。 */
+  const mm = api.meshStrata[0];
+  let botMis = 0, topMis = 0;
+  for (let q=0;q<SZ;q++) {
+    if ((mm._s[q] < 0) !== (top.S[q] < 0)) topMis++;
+    if ((mm._s[SZ+q] < 0) !== (bot.S[q] < 0)) botMis++;
+  }
+  check("交界面透明的地方，地层【底面】跟着透明（逐点）",
+        botMis === 0 && negI > 0, `${SZ} 点中 ${negI} 点应透明，不符 ${botMis}`);
+  check("地层的【顶面】只随它自己的那个界面透明，不被下面的界面误伤",
+        topMis === 0 && S.ifaces[1].S.every(v => v > 0));
+  check("min 场仍然保留（供面板统计用），但渲染已经不用它了",
         S.strata[0].S.every((v,q) => v === Math.min(S.ifaces[0].S[q], S.ifaces[1].S[q])));
   check("最上面的界面不会被这条规则判为透明（规则是单边的）",
         falsePos === 0, `${falsePos} 点`);
@@ -815,19 +825,141 @@ console.log("\n─── Y. 纯平地面（地块底面）───");
 }
 
 /* ============================================================ I3 */
-console.log("\n─── I3. 侧壁（切面）必须是实心的 ───");
+console.log("\n─── I3. 侧壁的透明判据 = 这一柱地层是否【倒置】 ───");
 {
-  // 两个交界面交叉 → 地层尖灭，顶/底面会出现透明区
-  reset([(x,y)=>800 + (x-2000)*0.28, (x,y)=>800 - (x-2000)*0.28]);
-  const m = api.meshStrata[0], nv = m._pos.length/3;
-  let capNeg = 0, wallNeg = 0;
-  for (let v=0; v<2*SZ; v++) if (m._s[v] < 0) capNeg++;
-  for (let v=2*SZ; v<nv; v++) if (m._s[v] < 0) wallNeg++;
-  check("顶/底面按规则出现透明区（地层尖灭处）", capNeg > 0, `${capNeg} 个顶点`);
-  check("侧壁永远是实心的：规则不在切面上挖洞", wallNeg === 0,
-        `${wallNeg}/${nv - 2*SZ} 个侧壁顶点被判透明`);
-  check("侧壁的顶点仍然齐全（顶面 + 底面 + 四壁）",
-        nv === 2*SZ + 4*NS*6, `${nv} 个顶点`);
+  const n = NS+1, iE = NS, Lm = api.mapL();
+
+  /* 三角面里 field<0 的【精确】面积比例。
+     场在三角面上是仿射的，换成重心坐标 (β,γ) 后就是：
+     在单纯形 β≥0, γ≥0, β+γ≤1 上求半平面 fa+β(fb−fa)+γ(fc−fa) < 0 的占比。
+     用 Sutherland–Hodgman 切一刀再算多边形面积 —— 不能用采样，
+     采样对薄片有下限，分不清"几乎全透"和"只透一丝"。 */
+  const triFrac = (fa, fb, fc) => {
+    const g = (b2, c2) => fa + b2*(fb-fa) + c2*(fc-fa);
+    const poly = [[0,0],[1,0],[0,1]], out = [];
+    for (let i=0;i<poly.length;i++) {
+      const P = poly[i], Q = poly[(i+1)%poly.length];
+      const gp = g(P[0],P[1]), gq = g(Q[0],Q[1]);
+      if (gp <= 0) out.push(P);
+      if ((gp <= 0) !== (gq <= 0)) {
+        const t = gp/(gp-gq);
+        out.push([P[0]+t*(Q[0]-P[0]), P[1]+t*(Q[1]-P[1])]);
+      }
+    }
+    if (out.length < 3) return 0;
+    let a2 = 0;
+    for (let i=0;i<out.length;i++) {
+      const P = out[i], Q = out[(i+1)%out.length];
+      a2 += P[0]*Q[1] - Q[0]*P[1];
+    }
+    return Math.abs(a2)/2 / 0.5;            // 单纯形面积 = 0.5
+  };
+
+  /* 3 个界面，刻意让三种情形同时出现：
+       I0 = 1000         （层序最老，基本平坦）
+       I1 = 1600         （厚 600，永远不倒置）
+       I2 = 1300 + 300v  （层序最新，向 −v 方向切下去）
+     于是（v 与列号 j 的换算：v = j/NS*12 − 6）
+       v > 1 : 地层1 正常
+       v = 1 : 地层1 厚度恰为 0  → 相切 / 尖灭
+       v < 1 : 地层1 厚度 < 0    → 层序颠倒，老的在新的上面
+       v < −1: I2 压到了 I0 之下 → I0 被埋，但地层0【自己没倒置】 */
+  const mk = (f, col) => { const I = api.mkIface('I', col, 1);
+    I.z = new Float32Array(S.res*S.res);
+    const c = (S.res-1)/2;
+    for (let b=0;b<S.res;b++) for (let a=0;a<S.res;a++) I.z[b*S.res+a] = f(a-c, b-c);
+    return I; };
+  S.ifaces = [ mk(()=>1000,            [150,128,104]),
+               mk(()=>1600,            [168,150,120]),
+               mk((u,v)=>1300 + 300*v, [120,138,150]) ];
+  S.strata = [ api.mkStratum('地层 0', [210,150,96], 1.0),
+               api.mkStratum('地层 1', [125,158,120], 1.0) ];
+  S.active = 2; S.showBase = true;
+  api.rebuild(false);
+
+  const thick = (k, q) => S.ifaces[k+1].Z[q] - S.ifaces[k].Z[q];
+
+  /* ---- 每个侧壁顶点的场 = 它所在那一柱的【厚度】 ---- */
+  let mism = 0, wall = 0, offZ = 0;
+  for (let k=0;k<S.strata.length;k++) {
+    const mm = api.meshStrata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
+    for (let v = 2*SZ; v < mm._pos.length/3; v++) {
+      const x = mm._pos[3*v], y = mm._pos[3*v+1], z = mm._pos[3*v+2];
+      const a = Math.round(x/Lm*NS), bq = Math.round(y/Lm*NS), q = bq*n + a;
+      const want = thick(k, q);
+      if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1, Math.abs(want))) mism++;
+      if (Math.min(Math.abs(z-top.Z[q]), Math.abs(z-bot.Z[q])) > 1e-3) offZ++;
+      wall++;
+    }
+  }
+  check("侧壁每个顶点的场 = 该柱地层的厚度（不是界面自己的场）",
+        mism === 0, `${mism}/${wall} 个不符`);
+  check("侧壁顶点确实落在两个界面之一上", offZ === 0, `${offZ} 个对不上`);
+
+  /* ---- 逐列核对：倒置 ⇔ 整条透明 ---- */
+  const colCheck = (k) => {
+    let inv=0, invSee=0, solid=0, solidOk=0, straddle=0, nearZero=Infinity, nearZeroSolid=true;
+    for (let j=0;j<NS;j++) {
+      const q1 = j*n + iE, q2 = (j+1)*n + iE;
+      const d1 = thick(k,q1), d2 = thick(k,q2);
+      const see = d1 < 0 && d2 < 0;
+      if (d1 < 0 && d2 < 0)      { inv++; if (see) invSee++; }
+      else if (d1 >= 0 && d2 >= 0) {
+        solid++; if (!see) solidOk++;
+        const m = Math.min(Math.abs(d1), Math.abs(d2));
+        if (m < nearZero) { nearZero = m; nearZeroSolid = !see; }
+      } else straddle++;
+    }
+    return { inv, invSee, solid, solidOk, straddle, nearZero, nearZeroSolid };
+  };
+  const c0 = colCheck(0), c1 = colCheck(1);
+  check("层序颠倒（厚度 < 0）的柱子：侧壁整条透明",
+        c1.inv > 0 && c1.invSee === c1.inv,
+        `地层1 有 ${c1.inv} 个倒置柱子，其中 ${c1.invSee} 个被判透明`);
+  check("层序正常的柱子：侧壁实心",
+        c1.solid > 0 && c1.solidOk === c1.solid,
+        `地层1 有 ${c1.solid} 个正常柱子，其中 ${c1.solidOk} 个实心`);
+  check("贴着相切线的柱子（厚度最接近 0）依然实心，不算颠倒",
+        c1.nearZeroSolid && c1.nearZero < 40,
+        `最接近相切的那一柱厚度 ${c1.nearZero.toFixed(1)} m，实心 = ${c1.nearZeroSolid}`);
+  check("地层0 自己从不倒置 → 它的侧壁整面实心",
+        c0.inv === 0 && c0.solidOk === c0.solid,
+        `地层0 有 ${c0.solid} 个正常柱子，${c0.solidOk} 个实心、${c0.inv} 个倒置`);
+
+  /* ---- 对照组：旧的 min(下界面场, 上界面场) 判据 ---- */
+  let oldHole = 0;
+  for (let j=0;j<NS;j++) {
+    const q1 = j*n + iE, q2 = (j+1)*n + iE;
+    for (const k of [0]) {                      // 地层0 自己没倒置
+      const d = (thick(k,q1) + thick(k,q2)) / 2;
+      const old1 = Math.min(S.ifaces[k].S[q1], S.ifaces[k+1].S[q1]);
+      const old2 = Math.min(S.ifaces[k].S[q2], S.ifaces[k+1].S[q2]);
+      if (d > 1e-6 && (old1 < 0 || old2 < 0)) oldHole++;   // 没倒置却被判透明 = 洞
+    }
+  }
+  check("旧 min 判据会在【没有倒置】的地层上挖洞（这就是要改的原因）",
+        oldHole > 0,
+        `地层0 有 ${oldHole}/${c0.solid} 个正常柱子会被旧的 min 判据误判为透明`);
+
+  /* ---- +x 侧壁的透明面积占比（重心坐标精确算） ---- */
+  const wallAreaFrac = (k, fieldOf) => {
+    let area = 0, tris = 0;
+    for (let j=0;j<NS;j++) {
+      const q1 = j*n + iE, q2 = (j+1)*n + iE;
+      const a = fieldOf(k,q1), b2 = fieldOf(k,q2);
+      area += triFrac(a, b2, b2) + triFrac(a, b2, a);   // 上下沿同值
+      tris += 2;
+    }
+    return area/tris;
+  };
+  const fNew = wallAreaFrac(1, (k,q) => thick(k,q));
+  const fOld = wallAreaFrac(1, (k,q) => Math.min(S.ifaces[k].S[q], S.ifaces[k+1].S[q]));
+  check("交错地层（地层1）的切面有相当一片是透明的，且正好是被倒置的那一半",
+        Math.abs(fNew - (c1.inv + c1.straddle*0.5)/NS) < 0.06 && fNew > 0.4,
+        `地层1 切面透明 ${(fNew*100).toFixed(1)}%，倒置柱子占 ${(c1.inv/NS*100).toFixed(1)}%`);
+  check("地层1 的顶面就是最上面那个界面，所以旧 min 判据在这里碰巧一致",
+        Math.abs(fOld - fNew) < 1e-9,
+        `旧 ${(fOld*100).toFixed(1)}% vs 新 ${(fNew*100).toFixed(1)}% —— 差别只在被埋的中间界面上`);
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);

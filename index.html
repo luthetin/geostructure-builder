@@ -570,9 +570,11 @@ function computeIfaceFields() {
     }
   }
 }
-/* 地层的透明场 = 上下两个界面的场的【较小者】：
-   夹着它的任一个界面在该处透明，这个地层就在该处一起透明 ——
-   于是能直接看进内部，就是一条天然的地层剖面。 */
+/* 地层的透明场 = 上下两个界面的场的【较小者】。
+   注意：这个场已经【不参与渲染】了 —— 渲染时每个面用它所依附的那个界面的场
+   （顶面用 top.S、底面用 bot.S、侧壁上下沿各用自己的）。
+   原因见 buildStratum 里侧壁那段注释：整片共用一个 min 会在尖灭处挖出整厚度的洞。
+   这里保留它只是为了面板统计与调试。 */
 function computeStratumFields() {
   for (let k=0;k<S.strata.length;k++) {
     const st = S.strata[k];
@@ -612,7 +614,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(st.S[q]);
+    sA.push(top.S[q]);
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -626,7 +628,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, bot.Z[q]);
     nrm.push(-bot.NX[q], -bot.NY[q], -bot.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(st.S[q]);
+    sA.push(bot.S[q]);
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -644,10 +646,17 @@ function buildStratum(k) {
       const at = pos.length/3;
       pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
       pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
-      /* 侧壁是【切面】：地质上切面永远是实心的，透明规则只作用于"面"（顶面／底面），
-         不在切面上挖洞。否则地层尖灭处侧壁会出现本不该有的透明斑块。
-         侧壁的透明度只由地层自己的不透明度决定。 */
-      for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(1e9); }
+      /* 侧壁的判据是【这个地层本身是不是倒置的】：
+           厚度 = 上面那个界面的高程 − 下面那个界面的高程
+         厚度 = 0（两个界面相切、地层尖灭）不算倒置 —— 保持实心；
+         厚度 < 0 说明老的地层跑到新地层上面去了，这一柱岩石根本不存在，
+         整条厚度都该透掉，否则它的切面会跟相邻地层的切面叠在一起。
+         注意：这里的场【沿柱子是常数】，因为"这一柱是不是倒置"本来就是
+         整个柱子的事，不是柱子内某个高度的事。
+         关掉次序规则开关时，切面也一并恢复全实心。 */
+      const d1 = top.Z[q1] - bot.Z[q1], d2 = top.Z[q2] - bot.Z[q2];
+      const th = S.orderRule ? [d1, d2, d2, d1, d2, d1] : 1e9;
+      for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }
   };
@@ -701,7 +710,9 @@ function buildBase() {
     const at = pos.length/3;
     for (const p of pts) {
       pos.push(p[0],p[1],p[2]); nrm.push(nx,ny,nz);
-      col.push(c[0],c[1],c[2],1); sA.push(1e9);
+      col.push(c[0],c[1],c[2],1);
+      /* 基底永远在最低那个界面之下，不可能倒置 —— 切面永远实心 */
+      sA.push(1e9);
     }
     for (let u=0;u<6;u++) idx.push(at+u);
   };
@@ -1419,14 +1430,11 @@ function render() {
     if (!st.vis || !meshStrata[k]) continue;
     // 排序键：图幅中心、该地层平均高程到相机的距离。
     // 地层是同一域上的高度场，这个远近次序足够准。
-    let cz = 0, n = 0;
-    for (let q = 0; q < SZ; q += 23) { cz += st.S[q]; n++; }
     const mid = (S.ifaces[k].Z[Math.floor(SZ/2)] + S.ifaces[k+1].Z[Math.floor(SZ/2)]) / 2;
     const mz = mid + 0;
     const mx = mapL()/2, my = mapL()/2;
     list.push({ k, st, m: meshStrata[k],
       d: (mx-eye[0])**2 + (my-eye[1])**2 + (mz-eye[2])**2 });
-    void cz; void n;
   }
   list.sort((a,b) => b.d - a.d);              // 半透明混合必须从远到近画
 
@@ -1502,9 +1510,14 @@ function setInfo() {
          `　拖动其中任一个即可一起升降`;
   }
   let trans = 0, tot = 0;
-  for (const st of S.strata) if (st.S) for (let q=0;q<SZ;q++) { tot++; if (st.S[q] < 0) trans++; }
+  /* 统计【实际被判透明的面】：每个地层统计它上下两个界面上的顶点。
+     不能再用 st.S（min）—— 那只是两面的较小值，和实际渲染已经不是一回事了。 */
+  for (let k=0;k<S.strata.length;k++) {
+    const a = S.ifaces[k].S, b = S.ifaces[k+1].S;
+    for (let q=0;q<SZ;q++) { if (a[q] < 0) trans++; if (b[q] < 0) trans++; tot += 2; }
+  }
   s += `<br>次序规则：<b>${trans
-      ? '已触发（有 ' + (trans/tot*100).toFixed(0) + '% 的地层体积因此透明）'
+      ? '已触发（有 ' + (trans/tot*100).toFixed(0) + '% 的层面因此透明）'
       : '未触发（叠置正常）'}</b>`;
   if (S.showContour) {
     if (!contourInfo.name) s += `<br>等高线：当前没有交界面`;
