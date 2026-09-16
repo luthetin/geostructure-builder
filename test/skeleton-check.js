@@ -63,6 +63,18 @@ class El {
     this.textContent=""; this._html=""; this.value=""; this.checked=false; this.type="text";
     this.name=""; this.children=[]; this.className="";
     this.clientWidth=1000; this.clientHeight=800; this.width=1000; this.height=800;
+    this._cls = new Set();
+  }
+  /* 抽屉面板靠 classList 开合，假 DOM 得跟上（只实现用到的那几个方法） */
+  get classList(){
+    const s = this._cls;
+    return {
+      add:    (...c) => { c.forEach(x => s.add(x)); },
+      remove: (...c) => { c.forEach(x => s.delete(x)); },
+      contains: (c) => s.has(c),
+      toggle: (c, on) => { const v = (on === undefined) ? !s.has(c) : !!on;
+                           if (v) s.add(c); else s.delete(c); return v; },
+    };
   }
   addEventListener(t,f){ (this._ls[t]=this._ls[t]||[]).push(f); }
   dispatchEvent(e){ for(const f of this._ls[e.type]||[]) f.call(this,e); return true; }
@@ -75,6 +87,7 @@ class El {
 }
 const reg = {};
 const doc = {
+  body: new El("body"),                 // 抽屉开关会给 body 加减 class
   getElementById(id) {
     if (reg[id]) return reg[id];
     const el = new El(id==="gl" ? "canvas" : "input", id);
@@ -759,6 +772,102 @@ console.log("\n─── M. Shift 多选 + 整组升降 ───");
 
 /* ============================================================ N */
 console.log("\n─── N. 空格 = 整个交界面上下平移 ───");
+
+/* ============================================================ Tx */
+console.log("\n─── Tx. 触屏（手机 / 平板）───");
+{
+  const [, I] = reset([(x,y)=>600, (x,y)=>900]);
+  S.active = 1;
+  const cvEl = reg['gl'], N = S.res;
+  const touch = (el, type, pts) => {
+    const touches = pts.map(([x,y]) => ({ clientX:x, clientY:y }));
+    el.dispatchEvent({ type, touches, preventDefault(){}, cancelable:true });
+  };
+  /* 单指拖一个控制点 —— 和鼠标拖动走同一套状态机 */
+  const s00 = api.project(api.activeCtrl(2,2), api.camMVP());
+  const i00 = 2*N+2, z0 = I.z[i00];
+  touch(cvEl, 'touchstart', [[s00[0], s00[1]]]);
+  touch(cvEl, 'touchmove',  [[s00[0], s00[1]-50]]);
+  check("单指拖控制点 = 改高度", Math.abs(I.z[i00]-z0) > 1e-6,
+        `Δ = ${(I.z[i00]-z0).toFixed(1)} m`);
+  touch(cvEl, 'touchend', []);
+  check("松手后不再拖动", (() => {
+    const z = I.z[i00];
+    touch(cvEl, 'touchmove', [[s00[0], s00[1]-90]]);
+    return Math.abs(I.z[i00]-z) < 1e-9;
+  })());
+
+  /* 双指捏合 = 缩放 */
+  const dBefore = (() => { const e = api.camEye();
+    return Math.hypot(e[0]-api.mapL()/2, e[1]-api.mapL()/2); })();
+  touch(cvEl, 'touchstart', [[400,400],[600,400]]);
+  touch(cvEl, 'touchmove',  [[300,400],[700,400]]);      // 张开 → 拉近
+  touch(cvEl, 'touchend', []);
+  const dAfter = (() => { const e = api.camEye();
+    return Math.hypot(e[0]-api.mapL()/2, e[1]-api.mapL()/2); })();
+  check("双指张开 → 相机拉近", dAfter < dBefore,
+        `${dBefore.toFixed(0)} → ${dAfter.toFixed(0)}`);
+
+  /* 多选开关代替 Shift */
+  const bMul = doc.getElementById('bMul'), bLift = doc.getElementById('bLift');
+  bMul.dispatchEvent({ type:'click', target:bMul });
+  check("多选开关能打开，并且和整体升降互斥",
+        /开/.test(bMul.textContent) && /关/.test(bLift.textContent),
+        `${bMul.textContent} / ${bLift.textContent}`);
+  const p1 = api.project(api.activeCtrl(0,0), api.camMVP());
+  const p2 = api.project(api.activeCtrl(8,8), api.camMVP());
+  api.selSet.clear();                       // 先清掉前面单指拖动时选中的那个点
+  touch(cvEl, 'touchstart', [[p1[0], p1[1]]]); touch(cvEl, 'touchend', []);
+  touch(cvEl, 'touchstart', [[p2[0], p2[1]]]); touch(cvEl, 'touchend', []);
+  check("触屏下也能多选（不用 Shift）", api.selSet.size === 2, `选中 ${api.selSet.size} 个`);
+
+  /* 整体升降开关代替空格 */
+  bLift.dispatchEvent({ type:'click', target:bLift });
+  check("打开整体升降后多选自动关掉",
+        /开/.test(bLift.textContent) && /关/.test(bMul.textContent),
+        `${bLift.textContent} / ${bMul.textContent}`);
+  const snap = Array.from(I.z);
+  touch(cvEl, 'touchstart', [[500, 400]]);
+  touch(cvEl, 'touchmove',  [[500, 350]]);
+  touch(cvEl, 'touchend', []);
+  const dif = snap.map((v,k) => I.z[k]-v);
+  check("整体升降：所有控制点位移完全相同",
+        dif.every(v => Math.abs(v-dif[0]) < 1e-3) && dif[0] > 0,
+        `Δ = ${dif[0].toFixed(1)} m`);
+  bLift.dispatchEvent({ type:'click', target:bLift });
+  check("再点一下关掉整体升降", /关/.test(bLift.textContent));
+
+  /* 相机初始距离要按屏幕宽高比自适应：竖屏（手机）水平视野窄，必须站得更远 */
+  {
+    const cvEl2 = reg['gl'];
+    const dist = () => { const e = api.camEye();
+      return Math.hypot(e[0]-api.mapL()/2, e[1]-api.mapL()/2); };
+    cvEl2.clientWidth = 1280; cvEl2.clientHeight = 800;      // 桌面横向
+    api.rebuild(true);
+    const dLand = dist();
+    cvEl2.clientWidth = 390;  cvEl2.clientHeight = 844;      // 手机竖屏
+    api.rebuild(true);
+    const dPort = dist();
+    check("竖屏把相机自动拉远（横屏装得下的距离在竖屏会溢出画面）",
+          dPort > dLand * 1.3, `横 ${dLand.toFixed(0)} → 竖 ${dPort.toFixed(0)}`);
+    cvEl2.clientWidth = 1000; cvEl2.clientHeight = 800;      // 还原，免得影响后面的用例
+    api.rebuild(true);
+  }
+
+  /* 抽屉：窄屏用的 ☰ */
+  const btn = doc.getElementById('menuBtn');
+  btn.dispatchEvent({ type:'click', target:btn });
+  check("☰ 第一次点开左面板", doc.body.classList.contains('menu'));
+  btn.dispatchEvent({ type:'click', target:btn });
+  check("☰ 第二次换成右面板", !doc.body.classList.contains('menu') && doc.body.classList.contains('side'));
+  btn.dispatchEvent({ type:'click', target:btn });
+  check("☰ 第三次全部收起", !doc.body.classList.contains('menu') && !doc.body.classList.contains('side'));
+  doc.getElementById('scrim').dispatchEvent({ type:'click', target:doc.getElementById('scrim') });
+  check("点遮罩也能收起（本来就没开，状态保持）",
+        !doc.body.classList.contains('menu') && !doc.body.classList.contains('side'));
+}
+
+
 {
   const [, I] = reset([(x,y)=>600, (x,y)=>600 + 0.2*Math.abs(x-2000)]);
   S.active = 1;
