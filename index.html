@@ -652,18 +652,20 @@ function buildStratum(k) {
   };
   /* 【地表面】是最上面那个界面本身，它不是一个"岩层" —— 面上方的东西透明，
      面自己永远正常显示。它的颜色按【露头带】给：
-     取"底面高程 ≤ 地表高程"的层里最上面那一层（也就是地表正下方压着的那一层），
-     一层都没有就是基底。带与带的分界自然落在各界面与地表的交线上。 */
+     取【地表高程正好落在它区间里】的那一层（z_k ≤ 地表 ≤ z_{k+1}），从上往下找第一个；
+     一层都不落在里面（地表在所有层的底面之下）就是基底。
+     这样带与带的分界只可能是【界面与地表的交线】——
+     之前用的是"底面 ≤ 地表、且底面最高的那一层"，界面互穿的地方
+     会让某个老层的底面反而最高而被选中，于是地表在根本没有相交的地方也变了颜色。 */
   const isLid = (top === S.ifaces[S.ifaces.length-1]);
   const topIfaceZ = isLid ? top.Z : null;
   const exposedColor = (q) => {
     const zs = topIfaceZ[q];
-    let best = -1, bestZ = -Infinity;
-    for (let j=0;j<S.strata.length;j++) {
-      const zk = S.ifaces[j].Z[q];              // 第 j 层的【底面】高程
-      if (zk <= zs + 1e-3 && zk > bestZ) { bestZ = zk; best = j; }
+    let pick = -1;
+    for (let j=S.strata.length-1; j>=0; j--) {
+      if (S.ifaces[j].Z[q] <= zs + 1e-3 && zs <= S.ifaces[j+1].Z[q] + 1e-3) { pick = j; break; }
     }
-    return best < 0 ? S.baseColor.map(v=>v/255) : S.strata[best].color.map(v=>v/255);
+    return pick < 0 ? S.baseColor.map(v=>v/255) : S.strata[pick].color.map(v=>v/255);
   };
   let kref = 1e-12;
   if (S.curv) {
@@ -751,9 +753,10 @@ function buildStratum(k) {
 /* 交界面本身也画出来（半透明薄面），带自己的颜色和透明度。
    沿法线抬高 1.5 m，免得和地层的顶/底面打架（z-fighting）。
 
-   【每一张层面都是完整的】：不受"一个界面之上只能有层序更高的岩层"那条规则约束，
-   整片都画出来。那条规则管的是【岩石】；面是面 —— 面上方的东西透明，面自己正常显示。
-   这样每个层面都是一张完整的面，调它的透明度就能看清层面与层面之间的空间关系。 */
+   【层面薄面同样服从层序规则】：某处若有更年轻的界面压在它下面，
+   这张面在那里就不画（场 < 0）。
+   曾一度把它改成整片无条件画出来，结果老界面的薄面跑到更年轻的界面之上，
+   直接违背了层序显示规则（实测：8516 个被压住的柱子，薄面全都还画着），所以改回来。 */
 function buildIfaceSurface(I) {
   const Lm = mapL(), n = NS+1;
   const pos=[], nrm=[], col=[], idx=[], sA=[];
@@ -763,7 +766,7 @@ function buildIfaceSurface(I) {
     pos.push(Lm*a/NS + I.NX[q]*1.5, Lm*b/NS + I.NY[q]*1.5, I.Z[q] + I.NZ[q]*1.5);
     nrm.push(I.NX[q], I.NY[q], I.NZ[q]);
     col.push(base[0],base[1],base[2],1);
-    sA.push(1e9);
+    sA.push(I.S[q]);
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;

@@ -409,18 +409,24 @@ console.log("\n─── I2. 交界面薄面（有自己的颜色与透明度）
   check("薄面抬高了一点，避免和地层顶/底面 z-fighting", minLift > 1.0,
         `最小抬高 ${minLift.toFixed(2)} m`);
 
-  /* 【每个层面都是一张完整的面】—— 不受"面之上只能有层序更高的岩层"那条规则约束。
-     那条规则管的是【岩石】；面是面：面上方的东西透明，面自己正常显示。
-     整片都画出来，才能靠调透明度看清层面与层面之间的空间关系。 */
+  /* 【层面薄面服从层序规则】—— 某处若有更年轻的界面压在它下面，那里就不画。
+     曾有一版把它改成无条件整片画，老界面的薄面就跑到更年轻的界面之上，
+     直接违背了层序显示规则（实测 8516 个被压住的柱子全都在画），必须回归。 */
   reset([(x,y)=>700, (x,y)=>400 + 0.25*x - 500, (x,y)=>900]);
-  let incomplete = 0, sheets = 0;
-  for (const sh of api.meshIfaces) {
-    if (!sh) continue;
+  let buried = 0, buriedDrawn = 0, sheets = 0;
+  api.meshIfaces.forEach((sh, i) => {
+    if (!sh) return;
     sheets++;
-    for (let v=0; v<sh._pos.length/3; v++) if (sh._s[v] < 0) incomplete++;
-  }
-  check("每一张层面都是【完整的面】（整片都画，不被规则裁掉）",
-        sheets > 0 && incomplete === 0, `${sheets} 张面，缺口顶点 ${incomplete} 个`);
+    const zi = S.ifaces[i].Z;
+    for (let q=0;q<SZ;q++) {
+      let isBuried = false;
+      for (let j=i+1;j<S.ifaces.length;j++) if (S.ifaces[j].Z[q] < zi[q]) isBuried = true;
+      if (isBuried) { buried++; if (sh._s[q] >= 0) buriedDrawn++; }
+    }
+  });
+  check("层面薄面服从层序规则：被更年轻界面压住的地方不画",
+        sheets > 0 && buried > 0 && buriedDrawn === 0,
+        `${sheets} 张面；被压住 ${buried} 个柱，其中还画着的 ${buriedDrawn} 个`);
   S.showIface = false; api.rebuild(false);
   const gone = api.meshIfaces.every(x => !x);
   S.showIface = true; api.rebuild(false);
@@ -995,6 +1001,28 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
   for (let b=0;b<n;b++) for (let a=0;a<n-1;a++){ const q=b*n+a; if (bandOf[q]!==bandOf[q+1]) bands++; }
   for (let b=0;b<n-1;b++) for (let a=0;a<n;a++){ const q=b*n+a; if (bandOf[q]!==bandOf[q+n]) bands++; }
   check("带与带的分界沿交线分布（相邻柱变色）", bands > 0, `${bands} 条分界边`);
+
+  /* 【露头带的分界只能落在"界面与地表的交线"上】。
+     曾经用"底面 ≤ 地表、且底面最高的那一层"来选，界面互穿的地方
+     会让某个老层的底面反而最高而被选中 —— 于是地表在根本没有相交的位置也变了颜色。 */
+  const zsOf = q => Z[Z.length-1][q];
+  const crossAt = q => { let m = Infinity;
+    for (let i=0;i<Z.length-1;i++) m = Math.min(m, Math.abs(Z[i][q] - zsOf(q)));
+    return m; };
+  let edgeN = 0, edgeNoCross = 0;
+  for (let b=0;b<n;b++) for (let a=0;a<n-1;a++){
+    const q=b*n+a; if (bandOf[q]===bandOf[q+1]) continue;
+    edgeN++;
+    if (Math.min(crossAt(q), crossAt(q+1)) >= Lm/NS) edgeNoCross++;
+  }
+  for (let b=0;b<n-1;b++) for (let a=0;a<n;a++){
+    const q=b*n+a; if (bandOf[q]===bandOf[q+n]) continue;
+    edgeN++;
+    if (Math.min(crossAt(q), crossAt(q+n)) >= Lm/NS) edgeNoCross++;
+  }
+  check("露头带的分界只落在【界面与地表的交线】上（地表没相交的地方不变色）",
+        edgeN > 0 && edgeNoCross === 0,
+        `${edgeN} 条分界边，其中地表未相交却变色的 ${edgeNoCross} 条`);
 
   /* ---- 地表面永远铺满：一个洞都没有 ---- */
   let lidAlive = 0;
