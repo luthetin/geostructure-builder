@@ -116,6 +116,19 @@ class El {
   getBoundingClientRect(){ return {left:0,top:0,right:1000,bottom:800,width:1000,height:800}; }
 }
 const reg = {};
+/* 内嵌预设：从 HTML 里把 <script class="preset" data-name="…"> 抓出来，
+   假装成节点交给 document.querySelectorAll —— 这样测试验的就是【真·内嵌数据】。
+   匹配前先去注释、再去掉主脚本（htmlNoScript 只去 <script> 那种无属性块，
+   内嵌预设那个带属性的块会留下），否则注释/代码里举例的标签文字会被当成预设。 */
+const htmlForPresets = htmlNoScript.replace(/<!--[\s\S]*?-->/g, '');
+const presetNodes = [...htmlForPresets.matchAll(/<script\b[^>]*class="preset"[^>]*>([\s\S]*?)<\/script>/g)]
+  .map((m, k) => {
+    const tag = m[0].slice(0, m[0].indexOf('>'));
+    const name = (tag.match(/data-name="([^"]+)"/) || [])[1] || ('预设 ' + (k+1));
+    return { name, text: m[1],
+             getAttribute(key){ return key === 'data-name' ? this.name : null; },
+             get textContent(){ return this.text; } };
+  });
 const doc = {
   body: new El("body"),                 // 抽屉开关会给 body 加减 class
   getElementById(id) {
@@ -126,7 +139,10 @@ const doc = {
     reg[id] = el; return el;
   },
   createElement(t){ return new El(t); },
-  querySelectorAll(){ return []; },
+  querySelectorAll(sel){
+    if (sel === 'script.preset') return presetNodes;
+    return [];
+  },
 };
 class Ev { constructor(t){ this.type=t; } }
 const winEl = new El("window");
@@ -141,6 +157,7 @@ globalThis.__api = {
   buildStratum, buildIfaceSurface, buildIntersections, topIface, baseZ,
   stitchContours, emitRibbon, smoothPoly, polysToSegs, sampleSurface,
   rebuild, render, zRange, camMVP, camEye, project, activeCtrl, pick, worldPerPixel,
+  PRESETS, loadPreset,
   exposedBandXYZ, bandColor,
   FS_SURF, drawMap, snapshot, loadText, selSet, buildStratumList, fileBaseName, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
@@ -151,6 +168,8 @@ globalThis.__api = {
   get meshContour(){ return meshContour; }, get mapState(){ return mapState; },
   get mapInterSegs(){ return mapInterSegs; },
   exposedBandXY: exposedBandXYZ,
+  get presets(){ return PRESETS; },
+  camDist(){ return camDist; },
   get mapFill(){ return mapImg; },
 };
 `;
@@ -1617,5 +1636,36 @@ console.log("\n─── I5. 基底（底平面 ↔ 最下面那个界面之间�
   check("基底深度改成 900 m 后结论不变", bad2 === 0, `不符 ${bad2} 个顶点`);
   S.baseDepth = 250; api.rebuild(false);
 }
+/* ============================================================ Pz */
+console.log("\n─── Pz. 内置预设模型 ───");
+{
+  check("页面里内嵌了预设，并读成了下拉列表",
+        api.presets.length >= 1 && api.presets[0].name === '预设1',
+        `${api.presets.length} 个：${api.presets.map(p=>p.name).join(", ")}`);
+  /* 直接验内嵌数据本身没坏（预设是数据，损坏了不该等到用户点了才发现） */
+  const d0 = JSON.parse(api.presets[0].json);
+  check("预设 JSON 能解析，且与源文件一致（19 个交界面 / 18 个地层）",
+        d0.format === 'strata-editor' && d0.ifaces.length === 19 && d0.strata.length === 18,
+        `${d0.ifaces.length} 交界面 / ${d0.strata.length} 地层，name="${d0.name}"`);
+
+  const sel = doc.getElementById('cPreset');
+  check("下拉里有占位项和预设项", /选择预设/.test(sel.innerHTML) && /预设1/.test(sel.innerHTML),
+        sel.innerHTML.slice(0, 80));
+
+  /* 选中它 = 真的载入 */
+  sel.value = '0';
+  sel.dispatchEvent({ type:'change', target: sel });
+  check("载入预设后模型换成了它（19 交界面 / 18 地层）",
+        S.ifaces.length === 19 && S.strata.length === 18,
+        `${S.ifaces.length} 交界面 / ${S.strata.length} 地层`);
+  check("预设里的模型名称、等高距、视角一并恢复",
+        S.modelName === '预设1' && S.contourInt === 720,
+        `name="${S.modelName}"，等高距 ${S.contourInt} m，相机距离 ${Math.round(api.camDist())}`);
+  check("载入后下拉回到占位项（方便再选同一个）", sel.value === '',
+        `value="${sel.value}"`);
+  check("载入后地层柱列表跟着重建", api.buildStratumList !== undefined,
+        `界面列表已刷新`);
+}
+
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);
