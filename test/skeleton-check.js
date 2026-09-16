@@ -35,20 +35,14 @@ const GLC = { DEPTH_TEST:1, BLEND:2, SRC_ALPHA:3, ONE_MINUS_SRC_ALPHA:4, ARRAY_B
   LINK_STATUS:11, TRIANGLES:12, POINTS:13, UNSIGNED_SHORT:14, FLOAT:15,
   COLOR_BUFFER_BIT:16, DEPTH_BUFFER_BIT:17, LINES:18, CULL_FACE:19, FRONT:20, BACK:21 };
 const draws = [];
-/* 纹理上传记录：调色板这类"传一次、之后靠 d.ts 记住"的资源，只有记下上传内容
-   才能验"换了模型以后传的还是不是新的"。 */
-const texUploads = [];
 let gDT = false, gDM = true, gCull = null;
 const fakeGL = new Proxy({
   getShaderParameter: () => true, getProgramParameter: () => true,
   createShader: () => ({}), createProgram: () => ({}), createBuffer: () => ({}),
   /* 【必须返回真值】：真机的 createTexture 返回一个对象（真值）。
-     这里若返回 undefined，"if (!PAL.tex) 就重建" 会退化成"每次都重建"，
-     调色板过期这种 bug 就永远测不出来。 */
+     返回 undefined 会让"只在没建过时建一次"这类判断退化成"每次都建"，
+     那种"资源只在开屏建一次、之后从不重建"的 bug 就永远测不出来。 */
   createTexture: () => ({ __tex:true }),
-  texImage2D: (target, level, ifmt, w, h, border, fmt, type, data) => {
-    texUploads.push({ w, h, data: data ? Array.from(data) : null });
-  },
   deleteBuffer: () => {}, getAttribLocation: () => 0, getUniformLocation: () => ({}),
   getShaderInfoLog: () => "", getProgramInfoLog: () => "",
   createImageData: (w, h) => ({ width:w, height:h, data: new Uint8ClampedArray(w*h*4) }),
@@ -111,8 +105,6 @@ globalThis.__api = {
   get meshIfaces(){ return meshIfaces; },
   get meshHandles(){ return meshHandles; }, get meshInter(){ return meshInter; },
   get meshContour(){ return meshContour; }, get mapState(){ return mapState; },
-  get paletteN(){ return PAL.n; },
-  get paletteCols(){ return PAL.cols; },
   get mapInterSegs(){ return mapInterSegs; },
 };
 `;
@@ -377,7 +369,7 @@ console.log("\n─── I. 沉积次序透明规则 ───");
       const q = bq*nn + a;
       const th = ii[k+1].Z[q] - ii[k].Z[q];
       const isCap = v < 2*SZ;
-      const isLid = (k === lastK && v < SZ);
+      const isLid = (k === lastK && (v < SZ || (v >= mm._cutFrom && v < mm._cutTo)));
       /* 面与剖面用【同一条规则】：min(C_k − 顶点高程, 本层厚度)。
          例外：最上面那个界面的顶面是【地表面本身】，它不是岩层，永远画。 */
       const want = isLid ? 1e9 : Math.min(Cof(k,q) - z, th);
@@ -391,31 +383,6 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         layerBad === 0, `${layerBad} 个不符`);
   check("【面与剖面都不高过 C_k】—— 不该显示的岩体没有显示",
         capOver === 0, `${capOver} 个顶点越界`);
-
-  /* 【露头带的颜色按片元查调色板，不插值】
-     逐顶点上色时，两个带交界那一格的颜色是线性混过去的 —— 过渡带整整一格宽
-     （≈42 m），窄带盖不住，露出来的就是毛边/锯齿。改成逐顶点给"带号"、
-     片元里按最近邻查调色板取色之后，颜色边界是锐利的。 */
-  {
-    const lid = api.meshStrata[S.strata.length-1];
-    check("地表顶面带上了【露头带号】缓冲", !!lid && !!lid.bbuf && !!lid._band,
-          lid && lid._band ? `${lid._band.length} 个顶点` : "没有");
-    if (lid && lid._band) {
-      let lo = Infinity, hi = -Infinity, n = 0;
-      for (let q=0;q<SZ;q++) {
-        const b = lid._band[q];
-        if (b < lo) lo = b; if (b > hi) hi = b; n++;
-      }
-      check("带号都在调色板范围内（0 = 基底，k+1 = 地层 k）",
-            lo >= 0 && hi <= S.strata.length,
-            `带号 ${lo} ~ ${hi}，调色板 ${S.strata.length+1} 项`);
-      check("带号覆盖了至少两种（不然露头带只有一种颜色）", lo !== hi, `${lo} ~ ${hi}`);
-    }
-    check("该网格标了使用调色板（其余几何不走这条路）",
-          !!lid && lid._pal === true);
-    api.render();
-    check("调色板纹理已经建立", api.paletteN >= 2, `${api.paletteN} 项`);
-  }
 
   /* 【软最小值必须是"往保守那边偏"】：它恒 ≤ 硬 min，所以绝不会多显示任何东西。
      顺带量一下剖面分界线的拐折（"锯齿"就是这个）。 */
@@ -457,99 +424,56 @@ console.log("\n─── I. 沉积次序透明规则 ───");
 }
 
 /* ============================================================ I1b */
-console.log("\n─── I1b. 曲率显示不能被调色板盖掉 ───");
+console.log("\n─── I1b. 表露面的颜色边界：靠切开几何，不靠插值 ───");
 {
-  /* 调色板那条路在片元里【直接取】露头带的颜色，会把地表面逐顶点算出来的
-     曲率色带整个盖掉（曲率是连续场，本来就该插值）。所以曲率打开时必须
-     退回逐顶点色。这里造一个穹隆，保证 K 到处都不为零，不是空跑。 */
-  reset([(x,y)=>900, (x,y)=>1500 - 0.00005*((x-2000)**2 + (y-2000)**2)]);
-  const lid0 = api.meshStrata[S.strata.length-1];
-  const flat = Array.from(lid0._col);
-  check("曲率关着时，地表面走调色板（颜色锐利）", lid0._pal === true);
-
-  S.curv = true; api.rebuild(false);
-  const lid1 = api.meshStrata[S.strata.length-1];
-  check("打开曲率显示后，地表面不再走调色板（否则曲率色带被盖掉）",
-        lid1._pal !== true);
-  let maxK = 0;
-  for (let q=0;q<SZ;q++) maxK = Math.max(maxK, Math.abs(S.ifaces[1].K[q]));
-  let dmax = 0;
-  for (let q=0;q<SZ;q++) for (let c=0;c<3;c++)
-    dmax = Math.max(dmax, Math.abs(lid1._col[q*4+c] - flat[q*4+c]));
-  check("曲率色带确实画在地表面上（顶点色与露头带色明显不同）",
-        maxK > 0 && dmax > 0.05,
-        `max|K| = ${maxK.toExponential(2)}，最大色差 ${dmax.toFixed(3)}`);
-
-  S.curv = false; api.rebuild(false);
-  check("关掉曲率后，地表面又走回调色板",
-        api.meshStrata[S.strata.length-1]._pal === true);
-}
-
-/* ============================================================ I1c */
-console.log("\n─── I1c. 调色板必须跟着模型重建（不能停在开屏那一版）───");
-{
-  /* 真机上 createTexture() 返回真值，于是"只在没建过时建一次"的写法会让调色板
-     永远停在开屏那一版：之后打开更大/不同配色的模型，更靠后的带号会被
-     CLAMP_TO_EDGE 夹到最后一格 —— 整个表露面变成一种颜色。 */
-  const colOf = c => [c[0],c[1],c[2]];
-  reset([(x,y)=>300, (x,y)=>900]);            // 开屏量级：1 个地层 ⇒ 调色板 2 项
-  api.render();
-  check("只有 1 个地层时，调色板 = 2 项（基底 + 地层）",
-        api.paletteN === 2 && texUploads.length > 0 && texUploads[texUploads.length-1].w === 2,
-        `PAL.n = ${api.paletteN}，纹理宽 ${texUploads[texUploads.length-1].w}`);
-
-  reset([(x,y)=>300,(x,y)=>700,(x,y)=>1100,(x,y)=>1500]);   // 换成 3 个地层的模型
-  api.render();
-  const want = [colOf(S.baseColor), ...S.strata.map(st=>colOf(st.color))];
-  const last = texUploads[texUploads.length-1];
-  check("换模型后调色板重建到 地层数+1 项",
-        api.paletteN === S.strata.length+1 && last.w === S.strata.length+1,
-        `PAL.n = ${api.paletteN}，纹理宽 ${last.w}，应当是 ${S.strata.length+1}`);
-  let bad = 0;
-  for (let i=0;i<want.length;i++)
-    for (let c=0;c<3;c++) if (last.data[i*4+c] !== want[i][c]) bad++;
-  check("传上去的颜色逐个 = 基底 + 各地层自身的颜色（不是旧模型那一版）",
-        bad === 0, `不符 ${bad} 个分量`);
-}
-
-/* ============================================================ I1d */
-console.log("\n─── I1d. 表露面的颜色边界必须落在真实交线上（不是格边中点）───");
-{
-  /* 片元里是 floor(u+0.5) 取最近的那个带，阈值落在 u = 带号+0.5 处。
-     如果 u 就是整数带号，插值跨过阈值的地方只能是格边中点 —— 而真实交线一般
-     不在中点（实测偏出中位 10.7 m、最大 20.6 m，半格 20.8 m），那条锯齿就是它。
-     这里直接把"阈值跨过处"和"场的零交点"都算出来比位置。 */
+  /* 露头带的边界就是"界面与地表的交线"，所以颜色边界必须落在那条线上。
+     逐顶点插值会糊掉整整一格（≈42 m）；片元里按带号查表虽然锐利，但阈值只能
+     落在格边中点（实测偏出中位 10.7 m、最大 20.6 m）。
+     现在的做法：把【跨带的那些格子】沿交线切开，一块整块同色 ——
+     颜色边界于是就是那条切线本身。 */
   reset([(x,y)=>1000, (x,y)=>1000 + 600*Math.sin(x/700)]);
-  const lid = api.meshStrata[S.strata.length-1];
-  const u = lid._band, n = NS+1, gs = api.mapL()/NS;
-  const Ztop = S.ifaces[1].Z, Z0 = S.ifaces[0].Z;
-  let nEdge = 0, worst = 0, worstMid = 0;
-  for (let by=0; by<NS; by++) for (let bx=0; bx<NS; bx++) {
-    const q = by*n + bx;
-    for (const r of [q+1, q+n]) {
-      const bl = Math.floor(u[q]+0.5), bh = Math.floor(u[r]+0.5);
-      if (Math.abs(bl-bh) !== 1) continue;
-      const lo = bl < bh ? q : r, hi = bl < bh ? r : q;
-      const e = Math.min(bl,bh);
-      const gl = Z0[lo]-Ztop[lo], gh = Z0[hi]-Ztop[hi];
-      if (!(gl > 0 && gh < 0)) continue;
-      const tStar = gl/(gl-gh);                       // 真实交线在边上的位置
-      const tU = (e+0.5 - u[lo])/(u[hi]-u[lo]);       // 阈值跨过处
-      nEdge++;
-      worst = Math.max(worst, Math.abs(tU-tStar)*gs);
-      worstMid = Math.max(worstMid, Math.abs(tStar-0.5)*gs);
-    }
-  }
-  check("构造有效：确实有跨带格边，且交线大多不在格边中点",
-        nEdge > 50 && worstMid > 5,
-        `${nEdge} 条跨带边，真实交线离中点最大 ${worstMid.toFixed(1)} m`);
-  check("颜色边界与真实交线的偏差 ≤ 0.5 m（原先可达半格 ≈ 21 m）",
-        worst < 0.5, `最大偏差 ${worst.toFixed(3)} m`);
-  let ok = true;
-  for (let q=0;q<SZ;q++) { const b = Math.floor(u[q]+0.5); if (b < 0 || b > S.strata.length) ok = false; }
-  check("修正后的带值仍落在各自带号的 ±0.5 之内（带号不会被改坏）", ok);
-}
+  const lid = api.meshStrata[0];
+  check("跨带的格子被切开了", lid._cutTo > lid._cutFrom && lid._cutFrom >= 2*SZ,
+        `切开 ${lid._cutTo - lid._cutFrom} 个顶点（从第 ${lid._cutFrom} 个起）`);
 
+  const P = lid._pos, C = lid._col, IX = lid._idx;
+  const cols = new Set();                       // 只看顶面那 SZ 个顶点
+  for (let v=0;v<SZ;v++) cols.add(C[v*4].toFixed(4)+","+C[v*4+1].toFixed(4)+","+C[v*4+2].toFixed(4));
+  check("表露面上确实有两种以上颜色（不然下面那条就是空跑）", cols.size >= 2, `${cols.size} 种`);
+
+  /* 1) 画出来的每个三角形都必须是单一颜色 —— 这是"边界是硬的"的直接判据。
+        三角形内部跨色，颜色就会在它里面线性糊开，边界又变成一格宽的糊边。 */
+  let tri = 0, mixed = 0, worst = 0;
+  for (let t=0;t+2<IX.length;t+=3) {
+    tri++;
+    let d = 0;
+    for (let c=0;c<3;c++) for (let u=0;u<3;u++)
+      d = Math.max(d, Math.abs(C[IX[t+c]*4+u] - C[IX[t]*4+u]));
+    if (d > 0.01) { mixed++; if (d > worst) worst = d; }
+  }
+  check("每个三角形都是单一颜色（边界不会在三角形内部糊开）",
+        mixed === 0, `${tri} 个三角形里混色 ${mixed} 个，最大色差 ${worst.toFixed(3)}`);
+
+  /* 2) 切开多边形的顶点必须正好落在交线上（不是格点、更不是格边中点）。
+        注意只查【离开地图边界】的点：sampleSurface 会把采样点夹回格内，
+        贴边的点量出来是假偏差。 */
+  const gs = api.mapL()/NS, top = S.ifaces[S.ifaces.length-1];
+  let nCut = 0, maxOff = 0;
+  for (let v=lid._cutFrom; v<lid._cutTo; v++) {
+    const x = P[v*3], y = P[v*3+1];
+    const onNode = Math.abs(x/gs - Math.round(x/gs)) < 1e-3 &&
+                   Math.abs(y/gs - Math.round(y/gs)) < 1e-3;
+    if (onNode) continue;                       // 格点本身当然不在交线上
+    if (x < gs || y < gs || x > api.mapL()-gs || y > api.mapL()-gs) continue;   // 贴边的不量
+    nCut++;
+    let best = Infinity;
+    for (let k=0;k<S.ifaces.length-1;k++)
+      best = Math.min(best, Math.abs(api.sampleSurface(S.ifaces[k].Z,x,y) - api.sampleSurface(top.Z,x,y)));
+    if (best > maxOff) maxOff = best;
+  }
+  check("切开点正好落在交线上（离最近交线 < 1 m）", nCut > 20 && maxOff < 1.0,
+        `${nCut} 个切开点，最远 ${maxOff.toFixed(3)} m`);
+}
 /* ============================================================ I2 */
 console.log("\n─── I2. 交界面薄面（有自己的颜色与透明度）───");
 {
@@ -1066,7 +990,11 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
     for (let i=k+1;i<Z.length;i++) s += Math.exp(-(Z[i][q]-lo)/SF2);
     return lo - SF2*Math.log(s); };
   const wantAt = (k,q,z,v) => {
-    if (k === S.strata.length-1 && v < SZ) return 1e9;        // 地表面本身
+    /* 地表面本身：永远是完整的面（顶面 + 随后追加的"切开多边形"顶点） */
+    if (k === S.strata.length-1) {
+      const mm = api.meshStrata[k];
+      if (v < SZ || (v >= mm._cutFrom && v < mm._cutTo)) return 1e9;
+    }
     return Math.min(Cof2(k,q) - z, thickAt(k,q));             // 面与剖面同一条
   };
 
@@ -1093,7 +1021,7 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
     const mm = api.meshStrata[k];
     for (let v=0; v<mm._pos.length/3; v++) {
       if (mm._s[v] < 0) continue;
-      if (k === S.strata.length-1 && v < SZ) continue;        // 地表面豁免
+      if (k === S.strata.length-1 && (v < SZ || (v >= mm._cutFrom && v < mm._cutTo))) continue;  // 地表面（含切开的多边形）豁免
       const x=mm._pos[3*v], y=mm._pos[3*v+1], z=mm._pos[3*v+2];
       const a=Math.round(x/Lm*NS), bq=Math.round(y/Lm*NS);
       if (a<0||a>NS||bq<0||bq>NS) continue;
@@ -1322,6 +1250,5 @@ console.log("\n─── I5. 基底（底平面 ↔ 最下面那个界面之间�
   check("基底深度改成 900 m 后结论不变", bad2 === 0, `不符 ${bad2} 个顶点`);
   S.baseDepth = 250; api.rebuild(false);
 }
-
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);
