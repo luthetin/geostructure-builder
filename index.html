@@ -613,6 +613,21 @@ function buildStratum(k) {
   const Lm = mapL(), n = NS+1, NSq = NS*NS;
   const pos=[], nrm=[], col=[], idx=[], sA=[];
   const base = st.color.map(v=>v/255);
+  /* 【这个地层自己存不存在】：厚度 = 上面那个界面的高程 − 下面那个界面的高程。
+     厚度为负说明它已经尖灭掉了，那么它的【所有面都不该画】。
+
+     这条是必需的一步：一个交界面会被【上下两个地层同时当作自己的边界】——
+     比如 iface 1 既是地层0 的顶面、又是地层1 的底面，两者用的是同一个场。
+     于是只要那个场被判成不透明，两个面就一起画了出来，
+     上面那层明明已经尖灭，却靠自己的底面又出现在图里（"本该消失的地层又出现了"）。
+     把每个面的场再和本层的厚度取 min，厚度为负时整层自动消失，
+     而厚度为正的地方一个字都不改。 */
+  const thick = q => top.Z[q] - bot.Z[q];
+  const withThick = (v, q) => {
+    if (!S.orderRule) return v;              // 关掉规则 = 看原始模型，什么都不藏
+    const d = thick(q);
+    return v < d ? v : d;
+  };
   let kref = 1e-12;
   if (S.curv) {
     const av=[]; for(let q=0;q<SZ;q++) av.push(Math.abs(top.K[q]));
@@ -631,7 +646,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(top.S[q]);
+    sA.push(withThick(top.S[q], q));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -645,7 +660,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, bot.Z[q]);
     nrm.push(-bot.NX[q], -bot.NY[q], -bot.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(bot.S[q]);
+    sA.push(withThick(bot.S[q], q));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -680,7 +695,9 @@ function buildStratum(k) {
          现在最上面那个界面的场已经因为对称规则变成有限值了，
          这里 min(0, ·) 依然是对的：正值一律折到 0。 */
       const tf = q => { const s = top.S[q]; return s < 0 ? s : 0; };
-      const th = [bot.S[q1], bot.S[q2], tf(q2), bot.S[q1], tf(q2), tf(q1)];
+      /* 同样要和本层厚度取 min：本层尖灭掉的地方，侧壁也不该留 */
+      const th = [withThick(bot.S[q1],q1), withThick(bot.S[q2],q2), withThick(tf(q2),q2),
+                  withThick(bot.S[q1],q1), withThick(tf(q2),q2), withThick(tf(q1),q1)];
       for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }

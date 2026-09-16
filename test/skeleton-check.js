@@ -319,40 +319,46 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         S.strata.every(st => st.S.every(v => v > 0)),
         `最小场值 ${Math.min(...S.strata[0].S).toFixed(0)} m`);
 
-  /* 一个更高的界面切到下面去。此时【上面那个（老的）反而是当下最高的面】，
-     它是这一处的地表面 —— 必须保持不透明，否则那里一个面都没有。
-     所以要透明的只有扎下去的那个年轻界面。 */
-  reset([(x,y)=>600, (x,y)=>600 + 0.25*x - 500]);
-  const bot = S.ifaces[0], top = S.ifaces[1];
-  let wrong = 0, negTop = 0, botKept = 0, cut = 0;
+  /* 三个界面：下 600 平、中 1200 平、最年轻的地表往右上方倾。
+     地表在 x<3143 处扎到中界面以下，在 x<1429 处连下界面也扎穿了。
+     于是中界面（老）反而成了那一带最高的面 —— 它就是该露出来的地表面。 */
+  reset([(x,y)=>600, (x,y)=>1200, (x,y)=>100 + 0.35*x]);
+  const i0 = S.ifaces[0], i1 = S.ifaces[1], i2 = S.ifaces[2];
+  let maxKept = 0, maxN = 0, cutHidden = 0, cutN = 0, wrong = 0;
   for (let q=0;q<SZ;q++) {
-    const crossed = top.Z[q] < bot.Z[q];
-    if (crossed) cut++;
-    /* 扎下去的那个（年轻的）必须透明 */
-    if (crossed && top.S[q] < 0) negTop++;
-    /* 被它扎下去的那个（老的、此时最高的）必须保持不透明 */
-    if (crossed && bot.S[q] >= 0) botKept++;
-    /* 没被扎下去的地方两者都不该透明 */
-    if (!crossed && (top.S[q] < 0 || bot.S[q] < 0)) wrong++;
+    const zs = [i0.Z[q], i1.Z[q], i2.Z[q]];
+    const zmax = Math.max(zs[0], zs[1], zs[2]);
+    const iMax = zs.indexOf(zmax);
+    maxN++;
+    if (S.ifaces[iMax].S[q] >= 0) maxKept++;
+    /* 地表不是最高的地方 = 它扎下去了，必须判透明 */
+    if (i2.Z[q] < zmax) {
+      cutN++;
+      if (i2.S[q] < 0) cutHidden++;
+    } else if (i2.S[q] < 0 || i1.S[q] < 0 || i0.S[q] < 0) wrong++;
   }
-  check("当下最高的那个界面永不透明（它就是这一处的地表面）",
-        cut > 0 && botKept === cut, `${cut} 点被扎下去，其中 ${botKept} 点保持不透明`);
-  check("扎下去的那个界面被判透明（于是它不再盖着下面）",
-        negTop === cut, `${cut} 点中 ${negTop} 点透明`);
-  check("没有互穿的地方两个界面都不透明", wrong === 0, `不符 ${wrong} 点`);
+  check("当下最高的那个界面永不透明（它就是这一处露出来的地表面）",
+        maxKept === maxN, `${maxN} 点中 ${maxKept} 点保持不透明`);
+  check("扎下去的地表被判透明（于是它不再盖着下面）",
+        cutN > 0 && cutHidden === cutN, `${cutN} 点中 ${cutHidden} 点透明`);
+  check("没有互穿的地方三个界面都不透明", wrong === 0, `不符 ${wrong} 点`);
 
   /* 级联要【看渲染出来的东西】，不能看那个统计用的 st.S。
-     顶点顺序：0..SZ-1 是顶面（依附 top），SZ..2SZ-1 是底面（依附 bot）。 */
-  const mm = api.meshStrata[0];
-  let botMis = 0, topMis = 0, topSee = 0;
+     顶点顺序：0..SZ-1 是顶面（依附 top），SZ..2SZ-1 是底面（依附 bot）。
+     面上最终的场 = min(界面场, 本层厚度) —— 本层尖灭掉的地方整层都不画。 */
+  const mmT = api.meshStrata[1];               // 上部地层（中界面 ↔ 地表）
+  let topMis = 0, topSee = 0, thickNeg = 0;
   for (let q=0;q<SZ;q++) {
-    if ((mm._s[q] < 0) !== (top.S[q] < 0)) topMis++;
-    if ((mm._s[SZ+q] < 0) !== (bot.S[q] < 0)) botMis++;
-    if (mm._s[q] < 0) topSee++;
+    const thick = i2.Z[q] - i1.Z[q];
+    if (thick < 0) thickNeg++;
+    const want2 = Math.min(i2.S[q], thick);
+    if ((mmT._s[q] < 0) !== (want2 < 0)) topMis++;
+    if (mmT._s[q] < 0) topSee++;
   }
-  check("交界面透明的地方，地层【顶面】跟着透明（逐点）",
+  check("地层的面 = min(界面场, 本层厚度)：界面透或本层尖灭，面都不画",
         topMis === 0 && topSee > 0, `透明 ${topSee} 点，不符 ${topMis}`);
-  check("交界面透明的地方，地层【底面】跟着透明（逐点）", botMis === 0);
+  check("上面那层确实尖灭掉了（构造有效，不是空跑）",
+        thickNeg > 0, `${thickNeg} 点厚度为负`);
   check("min 场仍然保留（供面板统计用），但渲染已经不用它了",
         S.strata[0].S.every((v,q) => v === Math.min(S.ifaces[0].S[q], S.ifaces[1].S[q])));
 
@@ -855,6 +861,9 @@ console.log("\n─── I3. 侧壁：渐变场，两端与顶/底面同源 ─�
   api.rebuild(false);
 
   const topEnd = (k,q) => { const s = S.ifaces[k+1].S[q]; return s < 0 ? s : 0; };
+  /* 本层存不存在：厚度为负就是尖灭掉了，所有面都不画 */
+  const thickAt = (k,q) => S.ifaces[k+1].Z[q] - S.ifaces[k].Z[q];
+  const withThick = (k,v,q) => { const d = thickAt(k,q); return v < d ? v : d; };
 
   let mism = 0, wall = 0, offZ = 0;
   for (let k=0;k<S.strata.length;k++) {
@@ -863,13 +872,13 @@ console.log("\n─── I3. 侧壁：渐变场，两端与顶/底面同源 ─�
       const x = mm._pos[3*v], y = mm._pos[3*v+1], z = mm._pos[3*v+2];
       const a = Math.round(x/Lm*NS), bq = Math.round(y/Lm*NS), q = bq*n + a;
       const isTop = onTop[(v - 2*SZ) % 6] === 1;
-      const want = isTop ? topEnd(k,q) : bot.S[q];
+      const want = withThick(k, isTop ? topEnd(k,q) : bot.S[q], q);
       if (Math.abs(mm._s[v] - want) > 1e-3*Math.max(1, Math.abs(want))) mism++;
       if (Math.min(Math.abs(z-top.Z[q]), Math.abs(z-bot.Z[q])) > 1e-3) offZ++;
       wall++;
     }
   }
-  check("侧壁顶点的场：下沿 = bot.S，上沿 = min(0, top.S)",
+  check("侧壁顶点的场：min(下沿 bot.S / 上沿 min(0,top.S), 本层厚度)",
         mism === 0, `${mism}/${wall} 个不符`);
   check("侧壁顶点确实落在两个界面之一上", offZ === 0, `${offZ} 个对不上`);
 
@@ -983,6 +992,35 @@ console.log("\n─── I4. 对称规则：更老的界面压在它上面时，
         topCapSee > 0, `${topCapSee}/${cols} 柱的顶面被判透明`);
   check("露出来的那层【不是整片透明】—— 至少有一部分是实心可看的",
         botCapSee < cols, `下面那层的顶面有 ${botCapSee}/${cols} 柱透明`);
+
+  /* 【共面双面】—— 一个交界面同时是上下两个地层的边界：
+       iface 1 既是地层0 的顶面、又是地层1 的底面，两者用同一个场。
+     所以必须断言：上面那层尖灭掉的地方，它的【所有面】都不画，
+     不能靠自己的底面又画回来（"本该消失的地层又出现了"）。 */
+  let deadCols = 0, deadAllHidden = 0, aliveTopOpaque = 0;
+  for (let j=0;j<NS;j++) {
+    const q = j*n + iE;
+    const dead = S.ifaces[2].Z[q] < S.ifaces[1].Z[q];     // 上面那层厚度为负
+    if (!dead) continue;
+    deadCols++;
+    const topCap = mmTop._s[q] < 0;                       // 顶面（=地表）
+    const botCap = mmTop._s[SZ + q] < 0;                  // 底面（=iface 1，与下面那层的顶面共面）
+    let wallAny = false;
+    for (let v = 2*SZ; v < mmTop._pos.length/3; v++) {
+      const x = mmTop._pos[3*v], y = mmTop._pos[3*v+1];
+      if (Math.abs(x/Lm*NS - iE) > 1e-6) continue;
+      if (Math.round(y/Lm*NS) !== j) continue;
+      if (mmTop._s[v] >= 0) wallAny = true;
+    }
+    if (topCap && botCap && !wallAny) deadAllHidden++;
+    if (mmBot._s[q] >= 0) aliveTopOpaque++;               // 下面那层的顶面（同一张面）
+  }
+  check("尖灭掉的那层：顶面、底面、侧壁【全都不画】（不会靠底面又冒出来）",
+        deadCols > 0 && deadAllHidden === deadCols,
+        `${deadCols} 个尖灭柱，其中 ${deadAllHidden} 柱整层隐藏`);
+  check("同一张面上，下面那层的顶面仍然是实心的（看得到它的颜色）",
+        aliveTopOpaque === deadCols,
+        `${deadCols} 个尖灭柱，下面那层顶面实心 ${aliveTopOpaque} 柱`);
 
   /* 叠置正常时对称规则绝不触发 —— 否则会误伤 */
   S.orderRule = false; api.rebuild(false);
