@@ -822,24 +822,32 @@ console.log("\n─── My. 右侧平面图：三种模式 + 交线 ───")
 
   /* ---- 交线：所有两两组合都要画出来，不能只画和地表面有关的 ---- */
   S.mapInter = true; S.mapContour = false;
-  api.drawMap();
-  const interStroke = ctx.strokes.filter(s => s.segs > 4 && /rgba\(0,0,0/.test(s.style));
-  const drawn = api.mapInterSegs;
-  let expect = 0, pairs = 0, buriedSegs = 0;
+  /* 先把三对交线的段数各自算出来：含地表面的（露头迹线）与不含的（埋在下面的） */
   const lidI = S.ifaces.length-1;
+  let lidSegs = 0, buriedSegs = 0, pairs = 0;
   for (let i=0;i<S.ifaces.length;i++) for (let j=i+1;j<S.ifaces.length;j++) {
     const F = new Float32Array(SZ);
     for (let q=0;q<SZ;q++) F[q] = S.ifaces[i].Z[q] - S.ifaces[j].Z[q];
     let segs = 0; for (const P of api.stitchContours(F)) segs += P.length-1;
     if (segs) pairs++;
-    if (j < lidI) buriedSegs += segs;          // 两边都不是地表面 = 埋在下面的那一对
-    expect += segs;
+    if (j === lidI) lidSegs += segs; else buriedSegs += segs;
   }
-  check("平面图上【每一对】相交的界面都画了交线（不只画地表面那条）",
-        pairs >= 2 && drawn === expect,
-        `${pairs} 对相交 / 共 ${drawn} 段，应当是 ${expect} 段`);
-  check("埋在下面的两个界面之间的交线也画（用户报的那一条）",
-        buriedSegs > 0, `不含地表面的那些对共 ${buriedSegs} 段`);
+  /* 默认【只画露头迹线】：和地表面相交的那些 = 露头带的分界。
+     埋在下面的两两交线（地表上根本看不到）默认不画，否则平面图是一坨线。 */
+  S.mapInterLid = true; api.drawMap();
+  const drawnLid = api.mapInterSegs;
+  check("默认只画露头迹线（与地表相交的那些），埋在下面的不画",
+        lidSegs > 0 && buriedSegs > 0 && drawnLid === lidSegs,
+        `画出 ${drawnLid} 段 = 露头迹线 ${lidSegs} 段（埋在下面的另有 ${buriedSegs} 段没画）`);
+
+  /* 关掉那个开关才画全部两两交线 */
+  S.mapInterLid = false; api.drawMap();
+  const drawnAll = api.mapInterSegs;
+  check("关掉开关后所有两两交线都画", pairs >= 3 && drawnAll === lidSegs + buriedSegs,
+        `${pairs} 对相交 / 共 ${drawnAll} 段，应当是 ${lidSegs + buriedSegs} 段`);
+  S.mapInterLid = true; api.drawMap();
+
+  const interStroke = ctx.strokes.filter(s => s.segs > 4 && /rgba\(0,0,0/.test(s.style));
   check("交线是黑色、且用一条路径描边（不是一格一格的小段）",
         interStroke.length >= 1 && interStroke.every(s => /rgba\(0,0,0,/.test(s.style)),
         `${interStroke.length} 次描边，样式 ${interStroke.map(s=>s.style).join(" / ")}`);

@@ -272,6 +272,7 @@
     <canvas id="map2d"></canvas>
     <label class="cb"><input type="checkbox" id="cMapContour"> 显示等高线</label>
     <label class="cb"><input type="checkbox" id="cMapInter"> 显示交线</label>
+    <label class="cb"><input type="checkbox" id="cMapInterLid" checked> 只画露头迹线（与地表相交的那些）</label>
     <label class="cb"><input type="radio" name="mapMode" value="color" checked> 彩色（颜色表示高度）</label>
     <label class="cb"><input type="radio" name="mapMode" value="gray"> 黑白</label>
     <label class="cb"><input type="radio" name="mapMode" value="user"> 用层面自身颜色</label>
@@ -315,7 +316,7 @@ const S = {
   interColor: [0, 0, 0], interAlpha: 1,
   showContour: false, contourInt: 100, contourLabel: false,
   contourColor: [0.353, 0.239, 0.129], contourAlpha: 0.9,
-  mapMode: 'color', mapContour: false, mapInter: false,
+  mapMode: 'color', mapContour: false, mapInter: false, mapInterLid: true,
   dragSens: 0.3,
   showBase: false, baseDepth: 250, baseColor: [92,88,80],
 };
@@ -1490,16 +1491,20 @@ function drawMap() {
     }
   }
 
-  /* 交线：各可见层面两两求交，投影到平面上（同样用平滑折线，不是逐格小段） */
+  /* 交线：投影到平面上（同样用平滑折线，不是逐格小段）。
+     默认【只画露头迹线】—— 也就是和地表面相交的那些曲线，它们是露头带的分界，
+     地质图上就该只有这些。埋在下面的两个界面互相穿插的交线在图上没有意义
+     （地表上根本看不到），一大堆堆在一起反而看不清；要看就关掉那个开关。 */
   mapInterSegs = 0;
   if (S.mapInter) {
-    const vis = S.ifaces;
+    const vis = S.ifaces, lid = vis.length - 1;
     const sc = W / mapL();
     const F = new Float32Array(SZ);
     mctx.strokeStyle = rgbaOf(S.interColor, Math.max(0.25, S.interAlpha));
     mctx.lineWidth = Math.max(1.5, 1.6*dpr);
     mctx.beginPath();
     for (let i=0;i<vis.length;i++) for (let j=i+1;j<vis.length;j++) {
+      if (S.mapInterLid && j !== lid) continue;      // 只要和地表面相交的那些
       for (let q=0;q<SZ;q++) F[q] = vis[i].Z[q] - vis[j].Z[q];
       for (const P0 of stitchContours(F)) {
         const P = smoothPoly(P0, 2);
@@ -2141,7 +2146,7 @@ const cbs = { cWire:'showWire', cFill:'showFill', cHandles:'showHandles',
               cXray:'xray', cInter:'inter', cRule:'orderRule', cCurv:'curv',
               cIface:'showIface', cBase:'showBase',
               cContour:'showContour', cMapContour:'mapContour',
-              cContourLabel:'contourLabel', cMapInter:'mapInter' };
+              cContourLabel:'contourLabel', cMapInter:'mapInter', cMapInterLid:'mapInterLid' };
 for (const id in cbs) {
   const el = document.getElementById(id);
   S[cbs[id]] = el.checked;
@@ -2252,7 +2257,7 @@ function snapshot() {
     inter: { color: S.interColor.slice(), alpha: S.interAlpha },
     contour: { show: S.showContour, interval: S.contourInt, label: S.contourLabel,
                color: S.contourColor.slice(), alpha: S.contourAlpha },
-    map: { mode: S.mapMode, contour: S.mapContour, inter: S.mapInter,
+    map: { mode: S.mapMode, contour: S.mapContour, inter: S.mapInter, interLid: S.mapInterLid,
            dragSens: S.dragSens },
     orderRule: S.orderRule, showIface: S.showIface,
     base: { show: S.showBase, depth: S.baseDepth, color: S.baseColor.slice() },
@@ -2397,12 +2402,14 @@ function loadText(text) {
     if (d.map.mode) S.mapMode = d.map.mode;
     if (typeof d.map.contour === 'boolean') S.mapContour = d.map.contour;
     if (typeof d.map.inter === 'boolean') S.mapInter = d.map.inter;
+    if (typeof d.map.interLid === 'boolean') S.mapInterLid = d.map.interLid;
     if (typeof d.map.dragSens === 'number') S.dragSens = d.map.dragSens;
     if (typeof S.dragSens !== 'number') S.dragSens = 0.3;
     document.getElementById('cDragSens').value = String(S.dragSens);
     document.getElementById('cDragSens_v').textContent = S.dragSens.toFixed(2);
     document.getElementById('cMapContour').checked = S.mapContour;
     document.getElementById('cMapInter').checked = S.mapInter;
+    document.getElementById('cMapInterLid').checked = S.mapInterLid;
     document.querySelectorAll('input[name=mapMode]').forEach(r => {
       r.checked = (r.value === S.mapMode);
     });
