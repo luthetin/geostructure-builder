@@ -346,9 +346,15 @@ console.log("\n─── I. 沉积次序透明规则 ───");
      【剖面（侧壁）】按岩体算（规则管面、不管岩体）：场 = min(本层厚度, 顶点高程 − 最下面那个界面)
      —— 岩体在那儿就画出来，所以剖面铺满。 */
   const Lm0 = api.mapL(), nn = NS+1, lastK = S.strata.length-1;
+  /* C_k 用【软最小值】：硬 min 在两个界面交叉处会换主人、曲线出现真折角，
+     剖面上那条分界线就一节一节地拐（"锯齿"）。软最小值恒 ≤ 硬 min，只会裁得更保守。 */
+  const SF = Math.max(1, api.mapL()/NS);
   const Cof = (k,q) => { let lo=Infinity;
     for (let i=k+1;i<ii.length;i++){ const z=ii[i].Z[q]; if (z<lo) lo=z; }
-    return isFinite(lo) ? lo : ii[k].Z[q]; };
+    if (!isFinite(lo)) return ii[k].Z[q];
+    let s = 0;
+    for (let i=k+1;i<ii.length;i++) s += Math.exp(-(ii[i].Z[q]-lo)/SF);
+    return lo - SF*Math.log(s); };
   let layerBad = 0, layerGone = 0, layerAlive = 0, capOver = 0, wallUnder = 0;
   for (let k=0;k<S.strata.length;k++) {
     const mm = api.meshStrata[k];
@@ -373,6 +379,26 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         layerBad === 0, `${layerBad} 个不符`);
   check("【面与剖面都不高过 C_k】—— 不该显示的岩体没有显示",
         capOver === 0, `${capOver} 个顶点越界`);
+
+  /* 【软最小值必须是"往保守那边偏"】：它恒 ≤ 硬 min，所以绝不会多显示任何东西。
+     顺带量一下剖面分界线的拐折（"锯齿"就是这个）。 */
+  {
+    const hardCof = (k,q) => { let lo=Infinity;
+      for (let i=k+1;i<ii.length;i++){ const z=ii[i].Z[q]; if (z<lo) lo=z; }
+      return isFinite(lo) ? lo : ii[k].Z[q]; };
+    let over = 0, worstCut = 0;
+    for (let k=0;k<S.strata.length;k++) {
+      for (let q=0;q<SZ;q++) {
+        const soft = Cof(k,q), hard = hardCof(k,q);
+        if (soft > hard + 1e-6) over++;
+        worstCut = Math.max(worstCut, hard - soft);
+      }
+    }
+    check("软最小值恒 ≤ 硬 min（只会裁得更保守，绝不会多显示）",
+          over === 0, `${over} 个点偏到了硬 min 之上，最大削掉 ${worstCut.toFixed(1)} m`);
+    check("软化幅度不至于削太多（一个网格步长以内）",
+          worstCut < api.mapL()/NS*1.5, `最大削掉 ${worstCut.toFixed(1)} m`);
+  }
   check("确实有被裁掉的部分（构造有效，不是空跑）", layerGone > 0,
         `${layerAlive} 个实心 / ${layerGone} 个不画`);
   check("min 场仍然保留（供面板统计用），但渲染已经不用它了",
@@ -901,9 +927,13 @@ console.log("\n─── I3. 地层实体：一个界面之上只能出现层序
   const thickAt = (k,q) => Z[k+1][q] - Z[k][q];
   const envOf = q => { let hi=-Infinity;
     for (let i=0;i<Z.length;i++){ if (Z[i][q]>hi) hi=Z[i][q]; } return hi; };
+  const SF2 = Math.max(1, Lm/NS);
   const Cof2 = (k,q) => { let lo=Infinity;
     for (let i=k+1;i<Z.length;i++){ if (Z[i][q]<lo) lo=Z[i][q]; }
-    return lo; };
+    if (!isFinite(lo)) return Z[k][q];
+    let s = 0;
+    for (let i=k+1;i<Z.length;i++) s += Math.exp(-(Z[i][q]-lo)/SF2);
+    return lo - SF2*Math.log(s); };
   const wantAt = (k,q,z,v) => {
     if (k === S.strata.length-1 && v < SZ) return 1e9;        // 地表面本身
     return Math.min(Cof2(k,q) - z, thickAt(k,q));             // 面与剖面同一条

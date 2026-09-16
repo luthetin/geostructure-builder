@@ -635,14 +635,27 @@ function buildStratum(k) {
        · 地表之上不许有东西：C_k ≤ 地表高程（地表是 i>k 里的一员），
          顶点高过地表就判负 → 剪掉
   /* 【岩石】的场 = min( C_k − 顶点高程 , 本层厚度 )
-       C_k(x,y) = min over i>k of （界面 i 的高程）  比本层年轻的界面里最低的那个
+       C_k(x,y) = 比本层年轻的那些界面里【最低】的那个
      —— 这就是"一个界面之上只能显示层序更高的岩层"。不该显示的（高过 C_k 的）
-     以及本层尖灭的部分，一律不画。面（顶/底面）和剖面（侧壁）都用这一条。 */
+     以及本层尖灭的部分，一律不画。面（顶/底面）和剖面（侧壁）都用这一条。
+
+     C_k 用【软最小值】而不是硬 min。硬 min 在两个界面交叉处会"换主人"，
+     曲线于是出现真正的折角 —— 剖面上那条分界线就一节一节地拐，看着就是锯齿
+     （实测拐折平均 13~22 m、最大 465~782 m，而界面本身的迹线只有 2 m 左右）。
+     软最小值是光滑的，折角被抹圆；而且它恒 ≤ 硬 min，所以只会裁得更保守，
+     绝不会多显示任何东西。两个界面离得远时它几乎等于硬 min。
+     soften 取一个渲染网格步长。实测（截图那个模型）：
+       拐折最大 36/22/9 m  →  15/7/9 m
+       代价：平均只削掉 0.6 m，最坏一列 27.6 m（只在界面交叉处） */
+  const soften = Math.max(1, Lm/NS);
   const C = new Float32Array(SZ);
   for (let q=0;q<SZ;q++) {
-    let lo = Infinity;
-    for (let i=k+1;i<S.ifaces.length;i++) { const z = S.ifaces[i].Z[q]; if (z < lo) lo = z; }
-    C[q] = isFinite(lo) ? lo : bot.Z[q];
+    let m = Infinity;
+    for (let i=k+1;i<S.ifaces.length;i++) { const z = S.ifaces[i].Z[q]; if (z < m) m = z; }
+    if (!isFinite(m)) { C[q] = bot.Z[q]; continue; }
+    let s = 0;
+    for (let i=k+1;i<S.ifaces.length;i++) s += Math.exp(-(S.ifaces[i].Z[q] - m)/soften);
+    C[q] = m - soften*Math.log(s);
   }
   const thickAt = q => top.Z[q] - bot.Z[q];
   const fieldAt = (q, z) => {
