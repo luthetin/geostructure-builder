@@ -512,6 +512,44 @@ console.log("\n─── I1c. 调色板必须跟着模型重建（不能停在�
         bad === 0, `不符 ${bad} 个分量`);
 }
 
+/* ============================================================ I1d */
+console.log("\n─── I1d. 表露面的颜色边界必须落在真实交线上（不是格边中点）───");
+{
+  /* 片元里是 floor(u+0.5) 取最近的那个带，阈值落在 u = 带号+0.5 处。
+     如果 u 就是整数带号，插值跨过阈值的地方只能是格边中点 —— 而真实交线一般
+     不在中点（实测偏出中位 10.7 m、最大 20.6 m，半格 20.8 m），那条锯齿就是它。
+     这里直接把"阈值跨过处"和"场的零交点"都算出来比位置。 */
+  reset([(x,y)=>1000, (x,y)=>1000 + 600*Math.sin(x/700)]);
+  const lid = api.meshStrata[S.strata.length-1];
+  const u = lid._band, n = NS+1, gs = api.mapL()/NS;
+  const Ztop = S.ifaces[1].Z, Z0 = S.ifaces[0].Z;
+  let nEdge = 0, worst = 0, worstMid = 0;
+  for (let by=0; by<NS; by++) for (let bx=0; bx<NS; bx++) {
+    const q = by*n + bx;
+    for (const r of [q+1, q+n]) {
+      const bl = Math.floor(u[q]+0.5), bh = Math.floor(u[r]+0.5);
+      if (Math.abs(bl-bh) !== 1) continue;
+      const lo = bl < bh ? q : r, hi = bl < bh ? r : q;
+      const e = Math.min(bl,bh);
+      const gl = Z0[lo]-Ztop[lo], gh = Z0[hi]-Ztop[hi];
+      if (!(gl > 0 && gh < 0)) continue;
+      const tStar = gl/(gl-gh);                       // 真实交线在边上的位置
+      const tU = (e+0.5 - u[lo])/(u[hi]-u[lo]);       // 阈值跨过处
+      nEdge++;
+      worst = Math.max(worst, Math.abs(tU-tStar)*gs);
+      worstMid = Math.max(worstMid, Math.abs(tStar-0.5)*gs);
+    }
+  }
+  check("构造有效：确实有跨带格边，且交线大多不在格边中点",
+        nEdge > 50 && worstMid > 5,
+        `${nEdge} 条跨带边，真实交线离中点最大 ${worstMid.toFixed(1)} m`);
+  check("颜色边界与真实交线的偏差 ≤ 0.5 m（原先可达半格 ≈ 21 m）",
+        worst < 0.5, `最大偏差 ${worst.toFixed(3)} m`);
+  let ok = true;
+  for (let q=0;q<SZ;q++) { const b = Math.floor(u[q]+0.5); if (b < 0 || b > S.strata.length) ok = false; }
+  check("修正后的带值仍落在各自带号的 ±0.5 之内（带号不会被改坏）", ok);
+}
+
 /* ============================================================ I2 */
 console.log("\n─── I2. 交界面薄面（有自己的颜色与透明度）───");
 {

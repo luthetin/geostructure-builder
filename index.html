@@ -744,6 +744,43 @@ function buildStratum(k) {
     const b = bandAt(q);
     return b <= 0 ? S.baseColor.map(v=>v/255) : S.strata[b-1].color.map(v=>v/255);
   };
+  /* 【把颜色边界挪到真实交线上】。
+     片元里是 floor(u+0.5) 取最近的那个带，阈值落在 u 的 0.5 处；如果 u 就是
+     整数带号，插值跨过 0.5 的地方只能是【格边中点】—— 实测这样偏出真实交线
+     中位 10.7 m、最大 20.6 m（半格 20.8 m），表露面上那条毛边/锯齿就是它。
+     所以跨带的那条格边上，把顶点往边界挪一点：设交线在该边 t 处（0<t<1，
+     从【低带那一端】算起，界面号 = 两带中小的那个），
+       t ≤ 1/2：u_低 = e + 0.5 − 0.5t/(1−t)，u_高 = e + 1
+       t > 1/2：u_低 = e − 0.5，            u_高 = e + 1.5 − (2t−1)/t
+     两者都仍落在各自的 [band−0.5, band+0.5) 内，所以带号本身不会被改坏
+     （平均也不会越界）；一个顶点被多条跨带边约束时取平均。 */
+  let bandVal = null;
+  if (isLid) {
+    const b = new Int32Array(SZ);
+    for (let q=0;q<SZ;q++) b[q] = bandAt(q);
+    const acc = new Float64Array(SZ), cnt = new Int32Array(SZ);
+    const add = (q,v) => { acc[q] += v; cnt[q]++; };
+    for (let by=0; by<n; by++) for (let bx=0; bx<n; bx++) {
+      const q = by*n + bx;
+      const nb = [];
+      if (bx+1 < n) nb.push(q+1);
+      if (by+1 < n) nb.push(q+n);
+      for (const r of nb) {
+        if (Math.abs(b[q]-b[r]) !== 1) continue;      // 只处理相邻两带（差 1）
+        const e = Math.min(b[q], b[r]);               // 分界 = 界面 e
+        const gl = (b[q] === e ? S.ifaces[e].Z[q] : S.ifaces[e].Z[r]) - topIfaceZ[b[q] === e ? q : r];
+        const gh = (b[q] === e ? S.ifaces[e].Z[r] : S.ifaces[e].Z[q]) - topIfaceZ[b[q] === e ? r : q];
+        if (!(gl > 0 && gh < 0)) continue;            // 这条边没有正经的零交点
+        const t = gl/(gl-gh);                         // 交线在边上的位置（从低带端算起）
+        const uLow  = (t <= 0.5) ? e + 0.5 - 0.5*t/(1-t) : e - 0.5;
+        const uHigh = (t <= 0.5) ? e + 1               : e + 1.5 - (2*t-1)/t;
+        add(b[q] === e ? q : r, uLow);
+        add(b[q] === e ? r : q, uHigh);
+      }
+    }
+    bandVal = new Float32Array(SZ);
+    for (let q=0;q<SZ;q++) bandVal[q] = cnt[q] ? acc[q]/cnt[q] : b[q];
+  }
   const bandArr = isLid ? new Array(SZ) : null;
   let kref = 1e-12;
   if (S.curv) {
@@ -776,7 +813,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    if (bandArr) bandArr[q] = bandAt(q);
+    if (bandArr) bandArr[q] = bandVal[q];   // 已按交线位置修正过的"带值"，不是整数带号
     sA.push(isLid ? 1e9 : fieldAt(q, top.Z[q]));
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
@@ -1101,7 +1138,6 @@ function emitRibbon(polys, NXg, NYg, NZg, hw, ZA, ZB, gapTest, pos, nrm, col) {
 function buildIntersections() {
   const out = [];
   const IFS = S.ifaces;
-  const gs = mapL()/NS;
   const F = new Float32Array(SZ);
   for (let i=0;i<IFS.length;i++) for (let j=i+1;j<IFS.length;j++) {
     const A = IFS[i], B = IFS[j];
@@ -1109,16 +1145,9 @@ function buildIntersections() {
     const polys = stitchContours(F);
     if (!polys.length) continue;
     const pos=[], nrm=[], col=[];
-    /* 【表露面上的那条带边界要加宽】。地表（最上面那个界面）与别的界面相交时，
-       交线正好是露头带换颜色的地方。
-       颜色本身现在按片元查调色板，边界是锐利的；但带号是逐顶点给的，
-       锐利边界落在两带【带号取中】的地方，也就是跨接那一格的中点 ——
-       比真实交线最多偏半个网格步长（≈21 m）。窄带只有 ±HW（16 m），
-       盖不住这个位置偏差，两边各露出一截，看着就是毛边。
-       所以涉及地表的交线用能盖住半格的宽度，其余交线仍然是细线。 */
-    const hw = (i === IFS.length-1 || j === IFS.length-1)
-             ? Math.max(HW, gs*0.55) : HW;
-    emitRibbon(polys, A.NX, A.NY, A.NZ, hw, A.Z, B.Z, null, pos, nrm, col);
+    /* 表露面上带与带的分界，颜色边界已经【精确落在交线上】（见 buildStratum 里
+       bandVal 的修正），所以这里不需要再加宽去盖位置偏差，仍然是细线。 */
+    emitRibbon(polys, A.NX, A.NY, A.NZ, HW, A.Z, B.Z, null, pos, nrm, col);
     if (pos.length) out.push(mesh(pos,nrm,col,null));
   }
   return out;
