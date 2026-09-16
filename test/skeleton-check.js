@@ -98,7 +98,7 @@ globalThis.__api = {
   buildStratum, buildIfaceSurface, buildIntersections, topIface, baseZ,
   stitchContours, emitRibbon, smoothPoly, polysToSegs, sampleSurface,
   rebuild, render, zRange, camMVP, camEye, project, activeCtrl, pick, worldPerPixel,
-  FS_SURF, drawMap, snapshot, loadText, selSet, buildStratumList,
+  FS_SURF, drawMap, snapshot, loadText, selSet, buildStratumList, fileBaseName, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
   get meshStrata(){ return meshStrata; }, get meshWire(){ return meshWire; },
   get meshBase(){ return meshBase; },
@@ -158,6 +158,90 @@ console.log("\n─── A0. 预设场景（必须在任何 reset 之前检查�
         `高程 ${S.ifaces[0].z[0].toFixed(0)} 与 ${S.ifaces[1].z[0].toFixed(0)} m`);
   const th = S.ifaces[1].z[0] - S.ifaces[0].z[0];
   check("地层有正厚度", th > 0, `${th.toFixed(0)} m`);
+
+  /* 【默认只勾选四样】：控制点手柄、交界面交线、显示交界面、沉积次序透明规则 */
+  {
+    const want = { cHandles:true, cInter:true, cIface:true, cRule:true };
+    const all = ['cCurv','cWire','cFill','cHandles','cXray','cInter','cBase','cIface',
+                 'cRule','cContour','cContourLabel','cMapContour','cMapInter'];
+    const wrong = all.filter(id => !!defaults[id].checked !== !!want[id]);
+    check("HTML 里默认勾选的正好是那四个（手柄 / 交线 / 交界面 / 次序规则）",
+          wrong.length === 0, wrong.length ? `不对的是 ${wrong.join(", ")}` : "共 4 项");
+    check("S 的状态与这些默认一致（关掉的确实关着）",
+          S.showHandles === true && S.inter === true && S.showIface === true &&
+          S.orderRule === true && S.showWire === false && S.showFill === false &&
+          S.xray === false && S.showBase === false && S.showContour === false &&
+          S.showFill === false && S.mapContour === false && S.mapInter === false);
+    check("交线默认是黑色",
+          S.interColor.every(v => v === 0) && defaults.cInterColor.value.toLowerCase() === '#000000',
+          `S.interColor = ${JSON.stringify(S.interColor)}，输入框 ${defaults.cInterColor.value}`);
+  }
+
+  /* 【模型命名】：能起名、能存进文件、能读回来，并且出现在标题与信息栏里 */
+  {
+    check("默认没有名字时显示占位名", (S.modelName||'') === '' && /未命名模型/.test(doc.title || ''),
+          `title = ${doc.title || ""}`);
+    const el = doc.getElementById('cModelName');
+    el.value = '华南褶皱带 · 剖面 A';
+    el.dispatchEvent({ type:'input', target: el });
+    check("输入名称后写进状态与页面标题",
+          S.modelName === '华南褶皱带 · 剖面 A' && (doc.title || '').indexOf('华南褶皱带') === 0,
+          `title = ${doc.title || ""}`);
+    const snap = api.snapshot();
+    check("存档里带了模型名称", snap.name === '华南褶皱带 · 剖面 A', `name = ${snap.name}`);
+    const txt = JSON.stringify(snap);
+    S.modelName = '';
+    api.loadText(txt);
+    check("读回来名称不丢",
+          S.modelName === '华南褶皱带 · 剖面 A' &&
+          doc.getElementById('cModelName').value === '华南褶皱带 · 剖面 A',
+          `name = ${S.modelName}`);
+    /* 下载的文件名跟着模型名走，非法字符要替换掉 */
+    S.modelName = 'a/b:c*d';
+    check("文件名用模型名称，非法字符被替换",
+          api.fileBaseName() === 'a_b_c_d', `实测 "${api.fileBaseName()}"`);
+    S.modelName = '华南褶皱带 · 剖面 A';
+    check("文件名直接用模型名", api.fileBaseName() === '华南褶皱带 · 剖面 A');
+    S.modelName = '';
+    check("没起名时文件名回落到默认", api.fileBaseName() === '地层模型');
+    /* 旧存档没有名称字段：能读、名字留空，不该报错 */
+    const flat = z0 => '[' + new Array(81).fill(z0).join(',') + ']';
+    api.loadText('{"format":"outcrop-skeleton","version":1,"res":9,"layers":[' +
+      '{"name":"层面 1","order":1,"z":' + flat(600) + '},' +
+      '{"name":"层面 2","order":2,"z":' + flat(900) + '}]}');
+    check("旧存档没有名称字段也能读（名字留空）",
+          S.modelName === '' && S.ifaces.length === 2, `name="${S.modelName}"`);
+    const el2 = doc.getElementById('cModelName');
+    el2.value = ''; el2.dispatchEvent({ type:'input', target: el2 });
+  }
+}
+
+/* ============================================================ A0b */
+console.log("\n─── A0b. 自动等高距 ───");
+{
+  /* 构造地质学的模型大小差得很远：几百米的构造和几千米的地形都有。
+     固定默认值总有一头不合适，所以给一个"按起伏自适应"的按钮：
+     目标 8~16 条线，取一个整的等高距。 */
+  const cases = [
+    { relief: 300,  lo: 200  },
+    { relief: 3800, lo: 1100 },
+    { relief: 60,   lo: 0    },
+  ];
+  let bad = [];
+  for (const c of cases) {
+    /* 等高线画在【最上面那个界面】上，所以起伏要造在地表上 */
+    reset([(x,y)=>c.lo - 500,
+           (x,y)=>c.lo + c.relief*(0.5 + 0.5*Math.sin(x/700))]);
+    S.showContour = true;
+    api.rebuild(false);
+    const btn = doc.getElementById('bAutoContour');
+    btn.dispatchEvent({ type:'click', target: btn });
+    const n = api.contours.levels;
+    if (n < 6 || n > 20) bad.push(`起伏 ${c.relief} → ${S.contourInt} m / ${n} 条`);
+    else console.log(`  （起伏 ${c.relief} m → 等高距 ${S.contourInt} m，${n} 条）`);
+  }
+  check("自适应后的等高距让线数落在合理范围（6~20 条）",
+        bad.length === 0, bad.length ? bad.join("；") : "三种起伏都合适");
 }
 
 /* ============================================================ A */
@@ -1311,6 +1395,24 @@ console.log("\n─── I5. 基底（底平面 ↔ 最下面那个界面之间�
   }
   check("基底深度改成 900 m 后结论不变", bad2 === 0, `不符 ${bad2} 个顶点`);
   S.baseDepth = 250; api.rebuild(false);
+}
+
+/* ============ 临时探针（验完删除）============ */
+console.log("\n─── 探针：等高线现状 ───");
+{
+  const Pf = "C:\\Users\\Luthetin\\Desktop\\地层模型 (2).json";
+  if (fs.existsSync(Pf)) {
+    reset([(x,y)=>300, (x,y)=>900]);
+    api.loadText(fs.readFileSync(Pf, "utf8"));
+    api.rebuild(false);
+    const L = api.topIface();
+    let lo=Infinity, hi=-Infinity; for (let q=0;q<SZ;q++){ if (L.Z[q]<lo) lo=L.Z[q]; if (L.Z[q]>hi) hi=L.Z[q]; }
+    console.log(`  地表高程 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m（起伏 ${(hi-lo).toFixed(0)} m）`);
+    console.log(`  等高距 = ${S.contourInt} m，S.showContour = ${S.showContour}`);
+    console.log(`  等高线：${api.contours.levels} 条，${api.contours.segs} 段`);
+    console.log(`  标注高程值：${api.anchors.map(a=>Math.round(a.v)).join(", ")}`);
+    console.log(`  滑块范围：min 20 max 400 step 10（HTML 里写死）`);
+  } else console.log("找不到模型文件");
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);

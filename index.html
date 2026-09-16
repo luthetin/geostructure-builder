@@ -78,6 +78,10 @@
 <div id="wrap">
   <aside id="ui">
     <h1>多层面骨架编辑器</h1>
+    <div class="row" style="margin-top:2px">
+      <label>模型名称</label>
+      <input type="text" id="cModelName" placeholder="未命名模型" maxlength="60" style="flex:1;min-width:0">
+    </div>
     <p class="hint">
       <b>拖动控制点</b> = 改高度　·　<b>Shift + 点</b> = 多选，再拖可一起升降<br>
       <b>空格 + 上下拖动</b> = 整个面升降　·　<b>拖空白 / 右键拖</b> = 旋转　·　<b>滚轮</b> = 缩放
@@ -124,16 +128,16 @@
 
     <fieldset>
       <legend>显示</legend>
-      <label class="cb"><input type="checkbox" id="cWire" checked> 骨架线框（正方形 + 对角线）</label>
+      <label class="cb"><input type="checkbox" id="cWire"> 骨架线框（正方形 + 对角线）</label>
       <label class="cb"><input type="checkbox" id="cFill"> 骨架面填充（低多边形）</label>
       <label class="cb"><input type="checkbox" id="cHandles" checked> 控制点手柄</label>
-      <label class="cb"><input type="checkbox" id="cXray" checked> 骨架透视（穿透可见）</label>
+      <label class="cb"><input type="checkbox" id="cXray"> 骨架透视（穿透可见）</label>
       <label class="cb"><input type="checkbox" id="cInter" checked> 交界面交线</label>
       <div class="row"><label>交线颜色</label>
-        <input type="color" id="cInterColor" value="#db291a">
+        <input type="color" id="cInterColor" value="#000000">
         <input type="range" id="cInterAlpha" min="0" max="1" step="0.05" value="1">
         <span class="ival" id="cInterAlpha_v">1.00</span></div>
-      <label class="cb"><input type="checkbox" id="cBase" checked> 显示地面（地块底面）</label>
+      <label class="cb"><input type="checkbox" id="cBase"> 显示地面（地块底面）</label>
       <div class="row"><label>地面深度</label>
         <input type="range" id="cBaseDepth" min="50" max="800" step="10" value="250">
         <span class="ival" id="cBaseDepth_v">250 m</span></div>
@@ -147,11 +151,12 @@
       <label class="cb"><input type="checkbox" id="cIface" checked> 显示交界面</label>
       <label class="cb"><input type="checkbox" id="cRule" checked> 沉积次序透明规则</label>
 
-      <label class="cb" style="margin-top:9px"><input type="checkbox" id="cContour" checked> 地表等高线</label>
-      <label class="cb"><input type="checkbox" id="cContourLabel" checked> 等高线标注高程数字</label>
+      <label class="cb" style="margin-top:9px"><input type="checkbox" id="cContour"> 地表等高线</label>
+      <label class="cb"><input type="checkbox" id="cContourLabel"> 等高线标注高程数字</label>
       <div class="row"><label>等高距</label>
-        <input type="range" id="cContourInt" min="20" max="400" step="10" value="100">
-        <span class="ival" id="cContourInt_v">100 m</span></div>
+        <input type="range" id="cContourInt" min="5" max="1000" step="5" value="100">
+        <span class="ival" id="cContourInt_v">100 m</span>
+        <button id="bAutoContour" title="按地表起伏挑一个合适的等高距">自动</button></div>
       <div class="row"><label>等高线色</label>
         <input type="color" id="cContourColor" value="#5a3d21">
         <input type="range" id="cContourAlpha" min="0" max="1" step="0.05" value="0.9">
@@ -207,8 +212,8 @@
     <h1>平面图</h1>
     <div id="mapInfo"></div>
     <canvas id="map2d"></canvas>
-    <label class="cb"><input type="checkbox" id="cMapContour" checked> 显示等高线</label>
-    <label class="cb"><input type="checkbox" id="cMapInter" checked> 显示交线</label>
+    <label class="cb"><input type="checkbox" id="cMapContour"> 显示等高线</label>
+    <label class="cb"><input type="checkbox" id="cMapInter"> 显示交线</label>
     <label class="cb"><input type="radio" name="mapMode" value="color" checked> 彩色（颜色表示高度）</label>
     <label class="cb"><input type="radio" name="mapMode" value="gray"> 黑白</label>
     <label class="cb"><input type="radio" name="mapMode" value="user"> 用层面自身颜色</label>
@@ -243,14 +248,18 @@ const D2R = Math.PI / 180;
 
 const S = {
   res: 9, ifaces: [], strata: [], active: 0, surf: 'interp',
-  showWire: true, showFill: false, showHandles: true, xray: true,
+  modelName: '',
+  /* 【默认只开这四样】：控制点手柄、交界面交线（黑色）、显示交界面、沉积次序透明规则。
+     线框/骨架填充/透视/地面/等高线/平面图等高线交线 默认都关 —— 一开就是干净的地质体，
+     要看哪个再自己打开。（这些值随后会被 HTML 里各控件的初始勾选状态覆盖。） */
+  showWire: false, showFill: false, showHandles: true, xray: false,
   inter: true, orderRule: true, showIface: true, curv: false, autoRotate: false,
-  interColor: [0.86, 0.16, 0.10], interAlpha: 1,
-  showContour: true, contourInt: 100, contourLabel: true,
+  interColor: [0, 0, 0], interAlpha: 1,
+  showContour: false, contourInt: 100, contourLabel: false,
   contourColor: [0.353, 0.239, 0.129], contourAlpha: 0.9,
-  mapMode: 'color', mapContour: true, mapInter: true,
+  mapMode: 'color', mapContour: false, mapInter: false,
   dragSens: 0.3,
-  showBase: true, baseDepth: 250, baseColor: [92,88,80],
+  showBase: false, baseDepth: 250, baseColor: [92,88,80],
 };
 const mapL = () => (S.res - 1) * SPACING;
 const mat  = () => S.surf === 'interp' ? MAT_CR : MAT_BS;
@@ -1730,7 +1739,10 @@ function render() {
    ============================================================ */
 function setInfo() {
   const [lo,hi] = zRange(), A = S.ifaces[S.active];
-  let s = `<b>${S.strata.length}</b> 个地层　<b>${S.ifaces.length}</b> 个交界面　` +
+  const nm = S.modelName || '未命名模型';
+  document.title = nm + ' · 多层面骨架编辑器';
+  let s = `<b>${nm}</b><br>` +
+          `<b>${S.strata.length}</b> 个地层　<b>${S.ifaces.length}</b> 个交界面　` +
           `控制网 <b>${S.res}×${S.res}</b>　图幅 <b>${(mapL()/1000).toFixed(1)} km</b><br>` +
           `高程范围 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m`;
   if (A) s += `<br>编辑中的交界面：<b>${A.name}</b>　（共 ${S.ifaces.length} 个，自下而上编号）`;
@@ -1905,6 +1917,35 @@ document.getElementById('cContourInt').addEventListener('input', e => {
   document.getElementById('cContourInt_v').textContent = S.contourInt + ' m';
   rebuild(false); render(); setInfo();
 });
+/* 模型名称：只改标题与信息栏，不用重建几何 */
+document.getElementById('cModelName').addEventListener('input', e => {
+  S.modelName = e.target.value;
+  setInfo();
+});
+/* 【自动等高距】：按当前地表起伏挑一个"整"的等高距，让线数落在 8~16 条附近。
+   构造地质学的模型大小差得很远（几百米的构造和几千米的地形都有），
+   固定一个默认值总有一头不合适，所以给一个一键自适应的按钮。
+   取"最接近 relief/12 的整值"，而不是往上取一档 —— 后者会明显偏粗。 */
+document.getElementById('bAutoContour').addEventListener('click', () => {
+  const L = topIface();
+  if (!L || !L.Z) return;
+  let lo = Infinity, hi = -Infinity;
+  for (let q=0;q<SZ;q++) { if (L.Z[q]<lo) lo=L.Z[q]; if (L.Z[q]>hi) hi=L.Z[q]; }
+  const relief = Math.max(1, hi-lo);
+  const target = relief/12;
+  const step = Math.pow(10, Math.floor(Math.log10(target)));
+  let best = 1, bd = Infinity;
+  for (const m of [1,2,2.5,3,5,7.5,10]) {
+    for (const s of [step/10, step, step*10]) {
+      const v = m*s, d = Math.abs(Math.log(v/target));
+      if (d < bd) { bd = d; best = v; }
+    }
+  }
+  S.contourInt = Math.max(1, Math.round(best));
+  document.getElementById('cContourInt').value = String(Math.min(1000, S.contourInt));
+  document.getElementById('cContourInt_v').textContent = S.contourInt + ' m';
+  rebuild(false); render(); setInfo();
+});
 document.getElementById('cContourColor').addEventListener('input', e => {
   S.contourColor = [1,3,5].map(k => parseInt(e.target.value.substr(k,2),16)/255);
   render();
@@ -1958,6 +1999,7 @@ window.addEventListener('resize', () => { resize(); render(); });
 function snapshot() {
   return {
     format: 'strata-editor', version: 2, spacing: SPACING,
+    name: S.modelName || '',
     res: S.res, surf: S.surf,
     inter: { color: S.interColor.slice(), alpha: S.interAlpha },
     contour: { show: S.showContour, interval: S.contourInt, label: S.contourLabel,
@@ -1984,15 +2026,20 @@ function downloadBlob(blob, name) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+/* 文件名用【模型名称】（去掉文件名里不安全的字符）；没起名就沿用老名字 */
+function fileBaseName() {
+  const nm = (S.modelName || '').trim().replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+  return nm || '地层模型';
+}
 function saveFile() {
   downloadBlob(new Blob([JSON.stringify(snapshot())], { type:'application/json' }),
-               '地层模型.json');
+               fileBaseName() + '.json');
 }
 function exportPng() {
   render();                                  // 保证缓冲里是最新一帧
   const a = document.createElement('a');
   a.href = cv.toDataURL('image/png');
-  a.download = '地层模型.png';
+  a.download = fileBaseName() + '.png';
   document.body.appendChild(a); a.click(); a.remove();
 }
 function loadText(text) {
@@ -2049,6 +2096,9 @@ function loadText(text) {
   S.res = res;
   S.surf = (d.surf === 'approx') ? 'approx' : 'interp';
   S.active = S.ifaces.length - 1;            // 默认选中地表
+  /* 模型名称：新版存档带 name；旧存档没有就留空（显示"未命名模型"） */
+  S.modelName = (typeof d.name === 'string') ? d.name : '';
+  { const el = document.getElementById('cModelName'); if (el) el.value = S.modelName; }
   if (typeof d.orderRule === 'boolean') {
     S.orderRule = d.orderRule;
     document.getElementById('cRule').checked = S.orderRule;
