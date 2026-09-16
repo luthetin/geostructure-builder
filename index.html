@@ -752,19 +752,11 @@ function buildStratum(k) {
      会让某个老层的底面反而最高而被选中，于是地表在根本没有相交的地方也变了颜色。 */
   const isLid = (top === S.ifaces[S.ifaces.length-1]);
   const topIfaceZ = isLid ? top.Z : null;
-  /* 露头带编号：0 = 基底，k+1 = 地层 k。逐顶点给，片元里按最近邻查调色板取色。 */
-  const bandAt = (q) => {
-    const zs = topIfaceZ[q];
-    let pick = -1;
-    for (let j=S.strata.length-1; j>=0; j--) {
-      if (S.ifaces[j].Z[q] <= zs + 1e-3 && zs <= S.ifaces[j+1].Z[q] + 1e-3) { pick = j; break; }
-    }
-    return pick + 1;
-  };
-  const exposedColor = (q) => {
-    const b = bandAt(q);
-    return b <= 0 ? S.baseColor.map(v=>v/255) : S.strata[b-1].color.map(v=>v/255);
-  };
+  /* 露头带编号：0 = 基底，k+1 = 地层 k。
+     判据与平面图的"用层面自身颜色"共用同一个函数（exposedBandXYZ），两处不会走偏；
+     格点上用 sampleSurface 取值，在顶点处正好等于该格点的高程。 */
+  const bandAt = (q) => exposedBandXYZ(Lm*(q%n)/NS, Lm*((q/n)|0)/NS);
+  const exposedColor = (q) => bandColor(bandAt(q), false);
   /* 【表露面的露头带本身就该是硬的】：带与带的边界是"界面与地表的交线"，
      所以颜色边界必须【落在那条交线上】，不能靠逐顶点插值糊过去（那样过渡带
      整整一格宽 ≈42 m），也不能靠片元里的阈值去猜格边中点（实测那样偏出真实
@@ -1356,6 +1348,28 @@ let mapInterSegs = 0;               // 平面图上画出的交线段数
 /* 把 rgba 拼成 CSS 串（交线颜色是 0~1 的浮点，要转回 0~255） */
 const rgbaOf = (c, a) =>
   `rgba(${c.map(v => Math.round(Math.max(0,Math.min(1,v))*255)).join(',')},${a})`;
+
+/* 【地表之下压着哪一层】—— 3D 的露头带和平面图的"用层面自身颜色"都用这一条：
+   取【地表高程正好落在它区间里】的那一层（z_k ≤ 地表 ≤ z_{k+1}），从上往下找第一个；
+   一层都不落在里面（地表在所有层的底面之下）就是基底（返回 -1）。
+   带号：0 = 基底，k+1 = 地层 k。 */
+function exposedBandXYZ(x, y) {
+  const nf = S.ifaces.length;
+  if (nf < 2) return 0;
+  const top = S.ifaces[nf-1];
+  if (!top.Z) return 0;
+  const zs = sampleSurface(top.Z, x, y);
+  for (let j=S.strata.length-1; j>=0; j--) {
+    const zb = sampleSurface(S.ifaces[j].Z, x, y);
+    const zt = sampleSurface(S.ifaces[j+1].Z, x, y);
+    if (zb <= zs + 1e-3 && zs <= zt + 1e-3) return j+1;
+  }
+  return 0;
+}
+function bandColor(band, out255) {
+  const c = band <= 0 ? S.baseColor : S.strata[band-1].color;
+  return out255 ? c.slice() : c.map(v => v/255);
+}
 function drawMap() {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const side = Math.round(238*dpr);
@@ -1376,16 +1390,40 @@ function drawMap() {
   mapState = { name:L.name, lo, hi };
 
   const d = mapImg.data;
-  for (let j=0;j<n;j++) for (let i=0;i<n;i++) {
-    const t = (L.Z[j*n+i]-lo)/span;
-    const r = n-1-j;                                  // 图像第 0 行在北
-    const p = (r*n+i)*4;
+  const ss = S.mapMode === 'user' ? 2 : 1;          // 色带模式超采样，边界不至于一格一块
+  const gn = n*ss, cell = mapL()/(gn-1);
+  const SS = new Uint8ClampedArray(gn*gn*3);
+  for (let j=0;j<gn;j++) for (let i=0;i<gn;i++) {
+    const x = i*cell, y = j*cell, p = (j*gn+i)*3;
     let c;
-    if (S.mapMode === 'gray')      { const g = Math.round(24 + 226*t); c = [g,g,g]; }
-    else if (S.mapMode === 'user' && S.strata.length)
-      c = S.strata[S.strata.length-1].color;      // 用最上面那个地层的颜色
-    else                           c = rampRGB(t);
-    d[p]=c[0]; d[p+1]=c[1]; d[p+2]=c[2]; d[p+3]=255;
+    if (S.mapMode === 'gray')       c = [255,255,255];      // 黑白 = 纯白底，线才是主角
+    else if (S.mapMode === 'user')  c = bandColor(exposedBandXYZ(x,y), true);
+    else                            c = rampRGB((sampleSurface(L.Z,x,y)-lo)/span);
+    SS[p]=c[0]; SS[p+1]=c[1]; SS[p+2]=c[2];
+  }
+  /* 缩到 NS+1 的图像（黑白模式不缩，保持纯白） */
+  for (let j=0;j<n;j++) for (let i=0;i<n;i++) {
+    const r = n-1-j, p = (r*n+i)*4;                 // 图像第 0 行在北
+    if (ss === 1) {
+      const s = (j*gn+i)*3;
+      d[p]=SS[s]; d[p+1]=SS[s+1]; d[p+2]=SS[s+2];
+    } else {
+      /* 3×3 取众数：色块边界不会被插值糊掉，缩下去也是硬的 */
+      const cnt = new Map();
+      for (let dj=-1;dj<=1;dj++) for (let di=-1;di<=1;di++) {
+        const jj = Math.min(gn-1, Math.max(0, j*ss+ss/2+dj|0));
+        const ii = Math.min(gn-1, Math.max(0, i*ss+ss/2+di|0));
+        const s = (jj*gn+ii)*3;
+        const key = (SS[s]<<16) | (SS[s+1]<<8) | SS[s+2];
+        cnt.set(key, (cnt.get(key)||0)+1);
+      }
+      let best = 0, bn = -1;
+      for (const [key,v] of cnt) { if (v > bn) { bn = v; best = key; } }
+      d[p]   = (best>>16) & 255;
+      d[p+1] = (best>>8)  & 255;
+      d[p+2] = best & 255;
+    }
+    d[p+3]=255;
   }
   offMapCtx.putImageData(mapImg, 0, 0);
   mctx.imageSmoothingEnabled = true;
@@ -1411,7 +1449,7 @@ function drawMap() {
       a.half  = (mctx.measureText(String(Math.round(a.v))).width/2 + 4*dpr) / sc;
       a.halfW = (6.5*dpr) / sc;
     }
-    mctx.strokeStyle = S.mapMode === 'gray' ? 'rgba(0,0,0,0.72)' : 'rgba(44,32,20,0.8)';
+    mctx.strokeStyle = S.mapMode === 'gray' ? '#000000' : 'rgba(44,32,20,0.8)';   // 黑白 = 纯黑线
     mctx.lineWidth = dpr;
     mctx.beginPath();
     for (const o of perLevel) {
@@ -1437,7 +1475,7 @@ function drawMap() {
     mctx.stroke();
 
     mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
-    mctx.fillStyle = '#33261a';                       // 不加白边：缺口就是干净的底
+    mctx.fillStyle = S.mapMode === 'gray' ? '#000000' : '#33261a';   // 不加白边：缺口就是干净的底
     for (const a of labels) {
       const px = a.x*sc, py = H - a.y*sc;
       // canvas 的 y 轴向下，所以方向取负；再翻正，避免数字倒着写

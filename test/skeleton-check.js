@@ -57,6 +57,34 @@ const fakeGL = new Proxy({
 }, { get(t,k){ return k in t ? t[k] : (k in GLC ? GLC[k] : () => {}); },
      set(t,k,v){ t[k]=v; return true; } });
 
+/* 假 2D 画布上下文：平面图是真·2D canvas，之前假 DOM 把 '2d' 也返回假 WebGL，
+   于是 drawMap 整个是空跑、平面图一条断言都没有。这里记录笔迹与填充像素，
+   平面图的模式、着色、交线段数就都能验了。 */
+class Ctx2D {
+  constructor(){ this._img = null; this.strokes = []; this.fills = []; this.texts = [];
+                 this.strokeStyle=''; this.fillStyle=''; this.lineWidth=1; this.font='';
+                 this.textAlign=''; this.textBaseline=''; this.imageSmoothingEnabled=false;
+                 this._path = []; this._stack = []; }
+  setTransform(){} save(){ this._stack.push(1); } restore(){ this._stack.pop(); }
+  translate(){} rotate(){} fillRect(){} clearRect(){}
+  createImageData(w,h){ return { width:w, height:h, data:new Uint8ClampedArray(w*h*4) }; }
+  getImageData(x,y,w,h){ return this.createImageData(w,h); }
+  putImageData(img){ this._img = img; }
+  drawImage(){ }
+  measureText(t){ return { width: String(t).length*6 }; }
+  fillText(t,x,y){ this.texts.push({ t, x, y, fill:this.fillStyle }); }
+  beginPath(){ this._path = []; }
+  moveTo(x,y){ this._path.push([[x,y]]); }
+  lineTo(x,y){ if (!this._path.length) this._path.push([[x,y]]);
+               else this._path[this._path.length-1].push([x,y]); }
+  stroke(){
+    let segs = 0;
+    for (const pl of this._path) segs += Math.max(0, pl.length-1);
+    this.strokes.push({ segs, paths:this._path.length,
+                        style:this.strokeStyle, width:this.lineWidth });
+  }
+  strokeRect(){ this.strokes.push({ segs:4, paths:1, style:this.strokeStyle, width:this.lineWidth }); }
+}
 class El {
   constructor(tag, id) {
     this.tagName=String(tag).toUpperCase(); this.id=id||""; this._ls={}; this.style={};
@@ -82,7 +110,9 @@ class El {
   querySelectorAll(){ return []; }
   querySelector(){ return new El("div"); }
   set innerHTML(v){ this._html=v; } get innerHTML(){ return this._html; }
-  getContext(){ return fakeGL; }
+  /* '2d' 给真的假 2D 上下文，其余（webgl）给假 GL */
+  getContext(kind){ if (kind === '2d') { if (!this._c2d) this._c2d = new Ctx2D(); return this._c2d; }
+                    return fakeGL; }
   getBoundingClientRect(){ return {left:0,top:0,right:1000,bottom:800,width:1000,height:800}; }
 }
 const reg = {};
@@ -111,6 +141,7 @@ globalThis.__api = {
   buildStratum, buildIfaceSurface, buildIntersections, topIface, baseZ,
   stitchContours, emitRibbon, smoothPoly, polysToSegs, sampleSurface,
   rebuild, render, zRange, camMVP, camEye, project, activeCtrl, pick, worldPerPixel,
+  exposedBandXYZ, bandColor,
   FS_SURF, drawMap, snapshot, loadText, selSet, buildStratumList, fileBaseName, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
   get meshStrata(){ return meshStrata; }, get meshWire(){ return meshWire; },
@@ -119,6 +150,8 @@ globalThis.__api = {
   get meshHandles(){ return meshHandles; }, get meshInter(){ return meshInter; },
   get meshContour(){ return meshContour; }, get mapState(){ return mapState; },
   get mapInterSegs(){ return mapInterSegs; },
+  exposedBandXY: exposedBandXYZ,
+  get mapFill(){ return mapImg; },
 };
 `;
 try {
@@ -770,8 +803,79 @@ console.log("\n─── M. Shift 多选 + 整组升降 ───");
   check("未选中的控制点纹丝不动", Math.abs(I.z[4*N+4]-zMid) < 1e-6);
 }
 
-/* ============================================================ N */
-console.log("\n─── N. 空格 = 整个交界面上下平移 ───");
+/* ============================================================ My */
+console.log("\n─── My. 右侧平面图：三种模式 + 交线 ───");
+{
+  /* 三个界面：下 900 平、中 900±400 起伏（于是和下界面互相穿插 = 埋在下面的一对）、
+     地表往右上方倾（和上面两个都相交）—— 三种情形的线都造出来了。 */
+  reset([(x,y)=>900, (x,y)=>900 + 400*Math.sin(x/500), (x,y)=>100 + 0.35*x]);
+  const cvEl = reg['gl'];
+  const ctx = reg['map2d'].getContext('2d');
+  /* 平面图的底色先在离屏 ImageData 上填好、再 drawImage 上屏，
+     所以直接读那张 ImageData（api.mapFill）就是"底图"的像素 */
+  const px = () => { const im = api.mapFill; return { w:im.width, h:im.height, d:im.data }; };
+  const uniqColors = () => {
+    const { w, h, d } = px(); const s = new Set();
+    for (let i=0;i<w*h;i++) s.add(d[i*4]+','+d[i*4+1]+','+d[i*4+2]);
+    return s;
+  };
+
+  /* ---- 交线：所有两两组合都要画出来，不能只画和地表面有关的 ---- */
+  S.mapInter = true; S.mapContour = false;
+  api.drawMap();
+  const interStroke = ctx.strokes.filter(s => s.segs > 4 && /rgba\(0,0,0/.test(s.style));
+  const drawn = api.mapInterSegs;
+  let expect = 0, pairs = 0, buriedSegs = 0;
+  const lidI = S.ifaces.length-1;
+  for (let i=0;i<S.ifaces.length;i++) for (let j=i+1;j<S.ifaces.length;j++) {
+    const F = new Float32Array(SZ);
+    for (let q=0;q<SZ;q++) F[q] = S.ifaces[i].Z[q] - S.ifaces[j].Z[q];
+    let segs = 0; for (const P of api.stitchContours(F)) segs += P.length-1;
+    if (segs) pairs++;
+    if (j < lidI) buriedSegs += segs;          // 两边都不是地表面 = 埋在下面的那一对
+    expect += segs;
+  }
+  check("平面图上【每一对】相交的界面都画了交线（不只画地表面那条）",
+        pairs >= 2 && drawn === expect,
+        `${pairs} 对相交 / 共 ${drawn} 段，应当是 ${expect} 段`);
+  check("埋在下面的两个界面之间的交线也画（用户报的那一条）",
+        buriedSegs > 0, `不含地表面的那些对共 ${buriedSegs} 段`);
+  check("交线是黑色、且用一条路径描边（不是一格一格的小段）",
+        interStroke.length >= 1 && interStroke.every(s => /rgba\(0,0,0,/.test(s.style)),
+        `${interStroke.length} 次描边，样式 ${interStroke.map(s=>s.style).join(" / ")}`);
+
+  /* ---- 黑白：只有白底黑线 ---- */
+  S.mapMode = 'gray'; api.drawMap();
+  const cols = uniqColors();
+  check("黑白模式 = 纯白底（高度不参与着色）",
+        cols.size === 1 && cols.has('255,255,255'), `填充色 ${[...cols].join(" | ")}`);
+  const grayStroke = ctx.strokes.filter(s => /#000000|rgba\(0,0,0/.test(s.style));
+  check("黑白模式下的线都是黑的", grayStroke.length >= 1,
+        grayStroke.map(s=>s.style+"×"+s.segs).join(" / "));
+
+  /* ---- 用层面自身颜色：和 3D 的露头带一样，一条条色带 ---- */
+  S.mapMode = 'user'; S.mapContour = false; api.drawMap();
+  const cols2 = uniqColors();
+  check("用层面自身颜色 = 露头带色带（不止一种颜色）",
+        cols2.size >= 2, `${cols2.size} 种颜色`);
+  /* 逐点核对：图上每个像素的颜色必须等于该处"地表之下压着的那一层"的颜色 */
+  {
+    const { w, h, d } = px();
+    const Lm = api.mapL(), step = Lm/(w-1);
+    let bad = 0, tested = 0;
+    for (let j=0;j<h;j+=3) for (let i=0;i<w;i+=3) {
+      const x = i*step, y = (h-1-j)*step;          // 图像第 0 行在北
+      const c = api.bandColor(api.exposedBandXY(x,y), true);
+      const p = (j*w+i)*4;
+      tested++;
+      if (Math.abs(d[p]-c[0])>1 || Math.abs(d[p+1]-c[1])>1 || Math.abs(d[p+2]-c[2])>1) bad++;
+    }
+    check("每个像素的颜色 = 该处露头那一层的颜色（与 3D 同一套判据）",
+          bad === 0, `${tested} 个采样点里不符 ${bad} 个`);
+  }
+  S.mapMode = 'color';
+}
+
 
 /* ============================================================ Tx */
 console.log("\n─── Tx. 触屏（手机 / 平板）───");
@@ -1505,24 +1609,5 @@ console.log("\n─── I5. 基底（底平面 ↔ 最下面那个界面之间�
   check("基底深度改成 900 m 后结论不变", bad2 === 0, `不符 ${bad2} 个顶点`);
   S.baseDepth = 250; api.rebuild(false);
 }
-
-/* ============ 临时探针（验完删除）============ */
-console.log("\n─── 探针：等高线现状 ───");
-{
-  const Pf = "C:\\Users\\Luthetin\\Desktop\\地层模型 (2).json";
-  if (fs.existsSync(Pf)) {
-    reset([(x,y)=>300, (x,y)=>900]);
-    api.loadText(fs.readFileSync(Pf, "utf8"));
-    api.rebuild(false);
-    const L = api.topIface();
-    let lo=Infinity, hi=-Infinity; for (let q=0;q<SZ;q++){ if (L.Z[q]<lo) lo=L.Z[q]; if (L.Z[q]>hi) hi=L.Z[q]; }
-    console.log(`  地表高程 ${lo.toFixed(0)} ~ ${hi.toFixed(0)} m（起伏 ${(hi-lo).toFixed(0)} m）`);
-    console.log(`  等高距 = ${S.contourInt} m，S.showContour = ${S.showContour}`);
-    console.log(`  等高线：${api.contours.levels} 条，${api.contours.segs} 段`);
-    console.log(`  标注高程值：${api.anchors.map(a=>Math.round(a.v)).join(", ")}`);
-    console.log(`  滑块范围：min 20 max 400 step 10（HTML 里写死）`);
-  } else console.log("找不到模型文件");
-}
-
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);
