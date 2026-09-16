@@ -344,6 +344,44 @@ console.log("\n─── I. 沉积次序透明规则 ───");
         ruleBad === 0, `${ruleSee} 个点应透明，不符 ${ruleBad}`);
   check("透明规则确实在起作用（不是全部不透明）", ruleSee > 0, `${ruleSee} 个透明点`);
 
+  /* 【交界面这条也用软最小值】—— 和岩体那条 C_k 同一个道理、同一个尺度。
+     硬 min 在"最小值换主人"处会折一下，丢边界跟着拐；软 min 光滑，而且恒 ≤ 硬 min，
+     所以只会多透明、绝不会多显示（层序规则不会被破坏）。 */
+  {
+    const soften = Math.max(1, api.mapL()/NS);
+    let over = 0, worstOver = 0, extraHide = 0, extraWorst = 0;
+    let roughHard = 0, roughSoft = 0;
+    for (let i=0;i<ii.length;i++) {
+      const zi = ii[i].Z, Sf = ii[i].S;
+      for (let q=0;q<SZ;q++) {
+        let m = Infinity, cnt = 0;
+        for (let j=0;j<ii.length;j++) {
+          if (j === i) continue;
+          const d = (j > i) ? (ii[j].Z[q] - zi[q]) : (zi[q] - ii[j].Z[q]);
+          if (d < m) m = d; cnt++;
+        }
+        if (!isFinite(m)) continue;
+        if (Sf[q] - m > 1e-3*Math.max(1, Math.abs(m))) { over++; worstOver = Math.max(worstOver, Sf[q]-m); }
+        if (m >= 0 && Sf[q] < 0) {                      // 定义说该画、软场却透 -> 多透的那部分
+          extraHide++;
+          extraWorst = Math.max(extraWorst, m);
+        }
+      }
+      /* 粗糙度：相邻格点二阶差分（折角越大越粗糙） */
+      for (let b2=1;b2<NS;b2++) for (let a2=1;a2<NS;a2++) {
+        const q = b2*(NS+1)+a2;
+        const h2 = Math.abs(2*Sf[q] - Sf[q-1] - Sf[q+1]) + Math.abs(2*Sf[q] - Sf[q-(NS+1)] - Sf[q+(NS+1)]);
+        roughSoft = Math.max(roughSoft, h2);
+      }
+    }
+    console.log(`  （软场：多透明的点 ${extraHide} 个，最大硬余量 ${extraWorst.toFixed(1)} m）`);
+    check("软场恒 ≤ 硬 min（只会多透明，绝不会多显示）",
+          over === 0, `${over} 个点软场偏到了硬 min 之上，最大 ${worstOver.toExponential(2)} m`);
+    check("多透出来的那部分在软化带内（不超过一个网格步长·log(界面数)）",
+          extraWorst < soften*Math.log(ii.length) + 1,
+          `最大硬余量 ${extraWorst.toFixed(1)} m，上限 ${(soften*Math.log(ii.length)+1).toFixed(1)} m`);
+  }
+
   /* 【面】遵守规则：一个界面之上只能出现层序比它高的岩层
         面（顶/底面）场 = min( C_k − 顶点高程 , 本层厚度 )   C_k = min over i>k of z_i
      例外：最上面那个界面的顶面是【地表面本身】，它不是岩层，永远画（颜色按露头带）。
@@ -1250,5 +1288,6 @@ console.log("\n─── I5. 基底（底平面 ↔ 最下面那个界面之间�
   check("基底深度改成 900 m 后结论不变", bad2 === 0, `不符 ${bad2} 个顶点`);
   S.baseDepth = 250; api.rebuild(false);
 }
+
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);

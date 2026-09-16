@@ -569,19 +569,32 @@ function computeIfaceFields() {
   }
   if (!S.orderRule) return;
   /* ①「更年轻的界面压在它下面」+ ②「更老的界面压在它上面」，取最小。
-     —— 这条规则只作用在【交界面那张薄面】上。地层实体不参与（见 buildStratum）。 */
+     —— 这条规则只作用在【交界面那张薄面】上。地层实体不参与（见 buildStratum）。
+
+     min 用【软最小值】，和岩体那条 C_k 同一个道理、同一个尺度：
+     硬 min 在"最小值换主人"的地方会折一下（实测这个模型上每个界面换
+     75~217 次），丢边界就在那些地方拐折起毛。软最小值是光滑的，折角被抹圆；
+     而且它恒 ≤ 硬 min —— 所以只会【多透明】、绝不会多显示，层序规则不会被破坏。 */
+  const soften = Math.max(1, mapL()/NS);
   for (let i=0;i<n;i++) {
     const si = S.ifaces[i].S, zi = S.ifaces[i].Z;
     for (let q=0;q<SZ;q++) {
-      let s1 = 1e9, s2 = 1e9;
-      const zq = zi[q];
+      let m = Infinity;
       for (let j=0;j<n;j++) {
         if (j === i) continue;
         const zj = S.ifaces[j].Z[q];
-        if (j > i) { const d = zj - zq;  if (d < s1) s1 = d; }   // ① 更年轻的压在它下面
-        else       { const d = zq - zj;  if (d < s2) s2 = d; }   // ② 更老的压在它上面
+        const d = (j > i) ? (zj - zi[q]) : (zi[q] - zj);
+        if (d < m) m = d;
       }
-      si[q] = s1 < s2 ? s1 : s2;
+      if (!isFinite(m)) { si[q] = 1e9; continue; }
+      let sum = 0;
+      for (let j=0;j<n;j++) {
+        if (j === i) continue;
+        const zj = S.ifaces[j].Z[q];
+        const d = (j > i) ? (zj - zi[q]) : (zi[q] - zj);
+        sum += Math.exp(-(d - m)/soften);
+      }
+      si[q] = m - soften*Math.log(sum);
     }
   }
 }
