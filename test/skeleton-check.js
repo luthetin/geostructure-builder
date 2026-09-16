@@ -91,12 +91,13 @@ globalThis.__api = {
   S, SPACING, NS, SZ, MAT_CR, MAT_BS, evalSurf, mapL, mat,
   mkIface, mkStratum, addStratum, delStratum, seedIface, relaxIface, resampleAll,
   evalIface, computeIfaceFields, computeStratumFields, stratumAlpha,
-  buildStratum, buildIfaceSurface, buildIntersections, topIface,
+  buildStratum, buildIfaceSurface, buildIntersections, topIface, baseZ,
   stitchContours, emitRibbon, smoothPoly, polysToSegs, sampleSurface,
   rebuild, render, zRange, camMVP, camEye, project, activeCtrl, pick, worldPerPixel,
   FS_SURF, drawMap, snapshot, loadText, selSet, buildStratumList,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
   get meshStrata(){ return meshStrata; }, get meshWire(){ return meshWire; },
+  get meshBase(){ return meshBase; },
   get meshIfaces(){ return meshIfaces; },
   get meshHandles(){ return meshHandles; }, get meshInter(){ return meshInter; },
   get meshContour(){ return meshContour; }, get mapState(){ return mapState; },
@@ -121,7 +122,7 @@ const M = () => MAT_CR;
 /* 按给定的交界面高程函数建场景；返回交界面数组 */
 function reset(fns) {
   S.ifaces = []; S.strata = []; S.res = 9;
-  S.orderRule = true; S.showIface = true; S.curv = false; S.surf = 'interp';
+  S.orderRule = true; S.showIface = true; S.showBase = true; S.curv = false; S.surf = 'interp';
   S.showWire = true; S.showFill = false; S.showHandles = true;
   S.xray = true; S.inter = true;
   S.showContour = true; S.contourInt = 100; S.contourLabel = true;
@@ -296,10 +297,17 @@ console.log("\n─── H. 绘制模式与两趟剔除 ───");
   check("线框没有被当成三角形绘制", !has(TRI, wireV));
   check("地层用 TRIANGLES 绘制", has(TRI, api.meshStrata[0].n), `索引 ${api.meshStrata[0].n}`);
   check("控制点手柄用 POINTS 绘制", has(PTS, api.meshHandles._pos.length/3));
-  const culls = draws.filter(d => d.mode===TRI && d.count===api.meshStrata[0].n);
-  check("地层分两趟画（先剔正面画背面，再剔背面画正面）",
-        culls.length === 2 && culls[0].cull === GLC.FRONT && culls[1].cull === GLC.BACK,
-        culls.map(d=>d.cull===GLC.FRONT?'FRONT':'BACK').join(' → '));
+
+  // 两个地层：必须"所有背面"先画完再画"所有正面"，
+  // 而不是每个地层各自 背面+正面（那样近处地层的背面会被远处的深度剔除）
+  reset([(x,y)=>300, (x,y)=>600, (x,y)=>900]);
+  draws.length = 0;
+  api.render();
+  const counts = api.meshStrata.filter(Boolean).map(m => m.n);
+  const seq = draws.filter(d => d.mode===TRI && counts.includes(d.count))
+                   .map(d => d.cull===GLC.FRONT ? 'F' : 'B').join('');
+  check("先画完全部地层的背面，再画全部正面（侧壁显示不全的修法）",
+        seq === 'FFBB', `实际顺序 ${seq}`);
 }
 
 /* ============================================================ I */
@@ -330,13 +338,11 @@ console.log("\n─── I. 沉积次序透明规则 ───");
   check("最上面的界面不会被这条规则判为透明（规则是单边的）",
         falsePos === 0, `${falsePos} 点`);
 
-  S.ifaces[0].alpha = 0; S.ifaces[1].alpha = 1;
-  check("界面不透明度调低时，地层不透明度上限跟着降",
-        api.stratumAlpha(0) === 0 && api.stratumAlpha(0) < S.strata[0].alpha,
-        `地层 ${S.strata[0].alpha} → 上限 ${api.stratumAlpha(0)}`);
-  S.ifaces[0].alpha = 1;
-  check("界面恢复不透明后，地层回到自身不透明度",
-        Math.abs(api.stratumAlpha(0) - S.strata[0].alpha) < 1e-9);
+  S.ifaces[0].alpha = 0; S.ifaces[1].alpha = 0.1;
+  check("手动调交界面的不透明度【不】影响地层（只有规则才能级联）",
+        Math.abs(api.stratumAlpha(0) - S.strata[0].alpha) < 1e-9,
+        `界面 0，地层仍为 ${api.stratumAlpha(0)}`);
+  S.ifaces[0].alpha = 1; S.ifaces[1].alpha = 1;
 
   S.orderRule = false; api.rebuild(false);
   check("关掉规则后不再有任何透明判定",
@@ -731,7 +737,12 @@ console.log("\n─── P. 深度遮挡状态 ───");
   const surfDraws = draws.filter(d => d.mode===TRI && strataCounts.includes(d.count));
   check("地层绘制时深度测试开启", surfDraws.length > 0 && surfDraws.every(d => d.dt === true),
         `${surfDraws.length} 次`);
-  check("地层绘制时写深度", surfDraws.length > 0 && surfDraws.every(d => d.dm === true));
+  const backPass  = surfDraws.filter(d => d.cull === GLC.FRONT);
+  const frontPass = surfDraws.filter(d => d.cull === GLC.BACK);
+  check("背面那趟不写深度（近处地层的背面才不会被远处剔除）",
+        backPass.length > 0 && backPass.every(d => d.dm === false), `${backPass.length} 次`);
+  check("正面那趟写深度（近处地层才能挡住远处）",
+        frontPass.length > 0 && frontPass.every(d => d.dm === true), `${frontPass.length} 次`);
 
   const interCounts = api.meshInter.map(m => m.n);
   const interDraws = draws.filter(d => d.mode===TRI && interCounts.includes(d.count));
@@ -780,6 +791,43 @@ console.log("\n─── W. 拖动灵敏度 ───");
   check("灵敏度可调，每像素米数按比例变化",
         Math.abs(api.worldPerPixel()/mpp - 1/0.3) < 1e-6, `1.0 → ${api.worldPerPixel().toFixed(2)} m/px`);
   S.dragSens = 0.3;
+}
+
+/* ============================================================ Y */
+console.log("\n─── Y. 纯平地面（地块底面）───");
+{
+  reset([(x,y)=>600 + 0.1*x, (x,y)=>900 + 0.1*x]);
+  check("生成了底面网格", !!api.meshBase);
+  const m = api.meshBase, z0 = api.baseZ();
+  const nv = m._pos.length/3;
+  let lo=Infinity, hi=-Infinity;
+  for (let v=nv-6; v<nv; v++) { lo=Math.min(lo,m._pos[v*3+2]); hi=Math.max(hi,m._pos[v*3+2]); }
+  check("地面是纯平的（底面顶点同一高程）", hi-lo < 1e-6, `z = ${z0.toFixed(0)} m`);
+  const minIface = Math.min(...S.ifaces.map(I => Math.min(...I.Z)));
+  check("地面在所有交界面之下", z0 < minIface, `地面 ${z0.toFixed(0)} < 最低界面 ${minIface.toFixed(0)}`);
+  check("地面深度 = 设定值", Math.abs(minIface - z0 - S.baseDepth) < 1e-6, `${S.baseDepth} m`);
+  check("基底侧壁把地面和最低界面连起来",
+        nv === 4*(NS)*6 + 6, `${nv} = 4×${NS}×6（四壁）+ 6（地面）`);
+  S.showBase = false; api.rebuild(false);
+  const gone = !api.meshBase;
+  S.showBase = true; api.rebuild(false);
+  check("关掉后不再生成底面", gone);
+}
+
+/* ============================================================ I3 */
+console.log("\n─── I3. 侧壁（切面）必须是实心的 ───");
+{
+  // 两个交界面交叉 → 地层尖灭，顶/底面会出现透明区
+  reset([(x,y)=>800 + (x-2000)*0.28, (x,y)=>800 - (x-2000)*0.28]);
+  const m = api.meshStrata[0], nv = m._pos.length/3;
+  let capNeg = 0, wallNeg = 0;
+  for (let v=0; v<2*SZ; v++) if (m._s[v] < 0) capNeg++;
+  for (let v=2*SZ; v<nv; v++) if (m._s[v] < 0) wallNeg++;
+  check("顶/底面按规则出现透明区（地层尖灭处）", capNeg > 0, `${capNeg} 个顶点`);
+  check("侧壁永远是实心的：规则不在切面上挖洞", wallNeg === 0,
+        `${wallNeg}/${nv - 2*SZ} 个侧壁顶点被判透明`);
+  check("侧壁的顶点仍然齐全（顶面 + 底面 + 四壁）",
+        nv === 2*SZ + 4*NS*6, `${nv} 个顶点`);
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);

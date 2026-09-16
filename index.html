@@ -133,6 +133,17 @@
         <input type="color" id="cInterColor" value="#db291a">
         <input type="range" id="cInterAlpha" min="0" max="1" step="0.05" value="1">
         <span class="ival" id="cInterAlpha_v">1.00</span></div>
+      <label class="cb"><input type="checkbox" id="cBase" checked> 显示地面（地块底面）</label>
+      <div class="row"><label>地面深度</label>
+        <input type="range" id="cBaseDepth" min="50" max="800" step="10" value="250">
+        <span class="ival" id="cBaseDepth_v">250 m</span></div>
+      <div class="row"><label>地面颜色</label>
+        <input type="color" id="cBaseColor" value="#5c5850"></div>
+      <div class="note" style="margin-top:4px">
+        整块模型下面垫一块<b>纯平地面</b>，地基到最下面那个交界面之间算基底。
+        基底侧壁 + 各地层侧壁连起来，就是一整条<b>地层剖面</b> —— 像一个区块那样。
+      </div>
+
       <label class="cb"><input type="checkbox" id="cIface" checked> 显示交界面</label>
       <label class="cb"><input type="checkbox" id="cRule" checked> 沉积次序透明规则</label>
 
@@ -239,6 +250,7 @@ const S = {
   contourColor: [0.353, 0.239, 0.129], contourAlpha: 0.9,
   mapMode: 'color', mapContour: true, mapInter: true,
   dragSens: 0.3,
+  showBase: true, baseDepth: 250, baseColor: [92,88,80],
 };
 const mapL = () => (S.res - 1) * SPACING;
 const mat  = () => S.surf === 'interp' ? MAT_CR : MAT_BS;
@@ -569,11 +581,11 @@ function computeStratumFields() {
     for (let q=0;q<SZ;q++) s[q] = a[q] < b[q] ? a[q] : b[q];
   }
 }
-/* 地层自身的不透明度上限还受两个界面牵制：
-   把界面不透明度调到 0，它夹着的地层就一起透掉。 */
+/* 地层自身的不透明度就用自己的。
+   注意：手动调交界面的不透明度【不】影响地层 —— 那是界面薄面的显示设置。
+   只有上面那条【规则】判定为透明时，地层才会跟着透明。 */
 function stratumAlpha(k) {
-  const st = S.strata[k];
-  return Math.min(st.alpha, S.ifaces[k].alpha, S.ifaces[k+1].alpha);
+  return S.strata[k].alpha;
 }
 /* 把一个地层建成实体：顶面 + 底面 + 四周侧壁。
    绕序一律朝外，渲染时先画背面再画正面（配合剔除），半透明才有正确层次。 */
@@ -632,8 +644,10 @@ function buildStratum(k) {
       const at = pos.length/3;
       pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
       pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
-      const th = [st.S[q1], st.S[q2], st.S[q2], st.S[q1], st.S[q2], st.S[q1]];
-      for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
+      /* 侧壁是【切面】：地质上切面永远是实心的，透明规则只作用于"面"（顶面／底面），
+         不在切面上挖洞。否则地层尖灭处侧壁会出现本不该有的透明斑块。
+         侧壁的透明度只由地层自己的不透明度决定。 */
+      for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(1e9); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }
   };
@@ -666,6 +680,48 @@ function buildIfaceSurface(I) {
     idx.push(p0,p1,p2); idx.push(p1,p3,p2);
   }
   return mesh(pos,nrm,col,idx, sA);
+}
+
+/* 整个模型下面垫一块【纯平的地面】，像《我的世界》里的一个区块：
+   地面到最下面那个交界面之间的部分算作基底，它的侧壁与各地层的侧壁连起来，
+   整块侧面就是一条完整的地层剖面。 */
+function baseZ() {
+  let lo = Infinity;
+  for (const I of S.ifaces) if (I.Z) for (let q=0;q<SZ;q++) if (I.Z[q] < lo) lo = I.Z[q];
+  if (!isFinite(lo)) lo = 600;
+  return lo - S.baseDepth;
+}
+function buildBase() {
+  const bot = S.ifaces[0];
+  if (!bot || !bot.Z) return null;
+  const Lm = mapL(), n = NS+1, z0 = baseZ();
+  const pos=[], nrm=[], col=[], idx=[], sA=[];
+  const c = S.baseColor.map(v=>v/255);
+  const quad = (pts, nx, ny, nz) => {
+    const at = pos.length/3;
+    for (const p of pts) {
+      pos.push(p[0],p[1],p[2]); nrm.push(nx,ny,nz);
+      col.push(c[0],c[1],c[2],1); sA.push(1e9);
+    }
+    for (let u=0;u<6;u++) idx.push(at+u);
+  };
+  const wall = (list, nx, ny) => {
+    for (let t=0;t<list.length-1;t++) {
+      const q1=list[t], q2=list[t+1];
+      const x1=Lm*(q1%n)/NS, y1=Lm*((q1/n)|0)/NS;
+      const x2=Lm*(q2%n)/NS, y2=Lm*((q2/n)|0)/NS;
+      quad([[x1,y1,z0],[x2,y2,z0],[x2,y2,bot.Z[q2]],
+            [x1,y1,z0],[x2,y2,bot.Z[q2]],[x1,y1,bot.Z[q1]]], nx, ny, 0);
+    }
+  };
+  const south=[], north=[], west=[], east=[];
+  for (let a=0;a<n;a++) { south.push(a); north.push((n-1)*n+a); }
+  for (let b=0;b<n;b++) { west.push(b*n); east.push(b*n+(n-1)); }
+  wall(south,0,-1); wall(north.slice().reverse(),0,1);
+  wall(west.slice().reverse(),-1,0); wall(east,1,0);
+  // 纯平的地面（法线朝下，绕序与顶面相反）
+  quad([[0,0,z0],[Lm,Lm,z0],[Lm,0,z0], [0,0,z0],[0,Lm,z0],[Lm,Lm,z0]], 0, 0, -1);
+  return mesh(pos,nrm,col,idx,sA);
 }
 function buildSkeletonOf(L) {
   const N = S.res;
@@ -1171,7 +1227,8 @@ function updateLabels(MVP) {
    重建
    ============================================================ */
 let selSet = new Set();          // 被 Shift 选中的控制点下标
-let meshStrata = [], meshIfaces = [], meshWire = null, meshFill = null, meshHandles = null,
+let meshStrata = [], meshIfaces = [], meshBase = null, meshWire = null,
+    meshFill = null, meshHandles = null,
     meshSel = null, meshInter = [], meshContour = [];
 let camInit = false;
 
@@ -1182,8 +1239,14 @@ function zRange() {
   if (!isFinite(lo)) { lo=0; hi=1000; }
   return [lo,hi];
 }
+/* 含纯平地面的整体高程范围（相机取景用） */
+function zRangeAll() {
+  const [lo, hi] = zRange();
+  return S.showBase ? [lo - S.baseDepth, hi] : [lo, hi];
+}
 function rebuild(fit) {
   dispose(meshWire); dispose(meshFill); dispose(meshHandles); dispose(meshSel);
+  dispose(meshBase);
   for (const m of meshStrata) dispose(m);
   for (const m of meshIfaces) dispose(m);
   for (const m of meshInter) dispose(m);
@@ -1193,6 +1256,7 @@ function rebuild(fit) {
   computeStratumFields();
   meshStrata = S.strata.map((st, k) => st.vis ? buildStratum(k) : null);
   meshIfaces = S.ifaces.map(I => (S.showIface && I.vis) ? buildIfaceSurface(I) : null);
+  meshBase = S.showBase ? buildBase() : null;
   const A = S.ifaces[S.active];
   if (A) {
     const g = buildSkeletonOf(A);
@@ -1200,7 +1264,7 @@ function rebuild(fit) {
   } else { meshWire=meshFill=meshHandles=meshSel=null; }
   meshInter = S.inter ? buildIntersections() : [];
   meshContour = buildContours();
-  const [lo,hi] = zRange();
+  const [lo,hi] = zRangeAll();
   camTarget = [mapL()/2, mapL()/2, (lo+hi)/2];
   if (fit || !camInit) { camDist = mapL()*1.95; camInit = true; }
   drawMap();                      // 平面图随编辑实时更新
@@ -1369,16 +1433,27 @@ function render() {
   /* 地层实体：每个地层分两趟画 —— 先背面、后正面，配合剔除。
      这样半透明地层的内部层次才是对的（先看到内壁，再看到外壁）。
      深度写入开着，近处的地层才能正确挡住远处的。 */
+  /* 地层实体的两趟绘制，关键是【两趟都跨全部地层】：
+     第一趟先把所有地层的背面都画掉（不写深度），第二趟再画所有正面（写深度）。
+     若按"每个地层各自背面+正面"来画，近处地层的背面会被远处地层已经写入的
+     深度剔除，看上去就像缺了下面半截、半透明 —— 那就是侧壁显示不全的原因。 */
   gl.enable(gl.DEPTH_TEST);
-  gl.depthMask(true);
   gl.enable(gl.CULL_FACE);
-  for (const o of list) {
-    const a = stratumAlpha(o.k);
-    gl.cullFace(gl.FRONT);
-    drawSurf(o.m, MVP, 0.52, 0.60, a, true);
+
+  /* 纯平地面 + 基底侧壁：整块模型的最外层，先画（写深度），
+     它的侧壁与各地层的侧壁连起来就是一条完整的地层剖面 */
+  if (meshBase) {
+    gl.depthMask(true);
     gl.cullFace(gl.BACK);
-    drawSurf(o.m, MVP, 0.52, 0.60, a, true);
+    drawSurf(meshBase, MVP, 0.52, 0.55, 1.0, true);
   }
+
+  gl.depthMask(false);
+  gl.cullFace(gl.FRONT);
+  for (const o of list) drawSurf(o.m, MVP, 0.52, 0.60, stratumAlpha(o.k), true);
+  gl.cullFace(gl.BACK);
+  gl.depthMask(true);
+  for (const o of list) drawSurf(o.m, MVP, 0.52, 0.60, stratumAlpha(o.k), true);
   gl.disable(gl.CULL_FACE);
 
   /* 交界面本身也画一层半透明薄面（有自己的颜色与透明度）。
@@ -1559,7 +1634,7 @@ document.getElementById('cRes').addEventListener('change', e => {
 document.getElementById('cSurf').addEventListener('change', e => { S.surf=e.target.value; after(false); });
 const cbs = { cWire:'showWire', cFill:'showFill', cHandles:'showHandles',
               cXray:'xray', cInter:'inter', cRule:'orderRule', cCurv:'curv',
-              cIface:'showIface',
+              cIface:'showIface', cBase:'showBase',
               cContour:'showContour', cMapContour:'mapContour',
               cContourLabel:'contourLabel', cMapInter:'mapInter' };
 for (const id in cbs) {
@@ -1598,6 +1673,17 @@ document.getElementById('cContourAlpha').addEventListener('input', e => {
 document.querySelectorAll('input[name=mapMode]').forEach(r =>
   r.addEventListener('change', () => { S.mapMode = r.value; drawMap(); }));
 
+/* 纯平地面：深度 / 颜色 */
+document.getElementById('cBaseDepth').addEventListener('input', e => {
+  S.baseDepth = +e.target.value;
+  document.getElementById('cBaseDepth_v').textContent = S.baseDepth + ' m';
+  rebuild(true); render(); setInfo();
+});
+document.getElementById('cBaseColor').addEventListener('input', e => {
+  S.baseColor = [1,3,5].map(k => parseInt(e.target.value.substr(k,2),16));
+  rebuild(false); render();
+});
+
 /* 拖动灵敏度：标称值随手把相机远近变化，所以每次缩放后要刷新 */
 function updateSensNote() {
   const mpp = worldPerPixel();
@@ -1634,6 +1720,7 @@ function snapshot() {
     map: { mode: S.mapMode, contour: S.mapContour, inter: S.mapInter,
            dragSens: S.dragSens },
     orderRule: S.orderRule, showIface: S.showIface,
+    base: { show: S.showBase, depth: S.baseDepth, color: S.baseColor.slice() },
     view: { az: camAz, el: camEl, dist: camDist },
     // 交界面自下而上；地层数 = 交界面数 − 1，strata[k] 位于 ifaces[k] 与 ifaces[k+1] 之间
     ifaces: S.ifaces.map(I => ({
@@ -1724,6 +1811,16 @@ function loadText(text) {
   if (typeof d.showIface === 'boolean') {
     S.showIface = d.showIface;
     document.getElementById('cIface').checked = S.showIface;
+  }
+  if (d.base) {
+    if (typeof d.base.show === 'boolean') S.showBase = d.base.show;
+    if (typeof d.base.depth === 'number') S.baseDepth = d.base.depth;
+    if (d.base.color) S.baseColor = d.base.color.slice();
+    document.getElementById('cBase').checked = S.showBase;
+    document.getElementById('cBaseDepth').value = String(S.baseDepth);
+    document.getElementById('cBaseDepth_v').textContent = S.baseDepth + ' m';
+    document.getElementById('cBaseColor').value = '#' + S.baseColor.map(v =>
+      Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2,'0')).join('');
   }
   selSet.clear();
   document.getElementById('cRes').value = String(S.res);
