@@ -146,19 +146,6 @@
 
       <label class="cb"><input type="checkbox" id="cIface" checked> 显示交界面</label>
       <label class="cb"><input type="checkbox" id="cRule" checked> 沉积次序透明规则</label>
-      <div class="row"><label>侧壁透明</label>
-        <select id="cWall">
-          <option value="match" selected>与顶/底面一致（二值）</option>
-          <option value="taper">渐变（相切处收拢成楔形）</option>
-          <option value="solid">侧壁始终实心</option>
-        </select></div>
-      <div class="note" style="margin-top:4px">
-        顶面和底面是<b>面</b>，在每一点上判一次，结论是二值的；
-        侧壁是<b>一段高度</b>，怎么判有三种选法：<br>
-        <b>与顶/底面一致</b> —— 侧壁和俯视图/仰视图完全对上，只要上下任一面透，这个柱子就整条透；
-        <b>渐变</b> —— 在两者之间线性过渡，透明区在相切处收拢成楔形，不会出现贯穿的洞；
-        <b>始终实心</b> —— 切面当作被切开的岩石，永远不透明。
-      </div>
 
       <label class="cb" style="margin-top:9px"><input type="checkbox" id="cContour" checked> 地表等高线</label>
       <label class="cb"><input type="checkbox" id="cContourLabel" checked> 等高线标注高程数字</label>
@@ -257,7 +244,7 @@ const D2R = Math.PI / 180;
 const S = {
   res: 9, ifaces: [], strata: [], active: 0, surf: 'interp',
   showWire: true, showFill: false, showHandles: true, xray: true,
-  inter: true, orderRule: true, wallMode: 'match', showIface: true, curv: false, autoRotate: false,
+  inter: true, orderRule: true, showIface: true, curv: false, autoRotate: false,
   interColor: [0.86, 0.16, 0.10], interAlpha: 1,
   showContour: true, contourInt: 100, contourLabel: true,
   contourColor: [0.353, 0.239, 0.129], contourAlpha: 0.9,
@@ -564,7 +551,14 @@ function evalIface(I) {
    用【连续有符号场】而不是逐顶点 0/1 开关：
      S_i(x,y) = min over j>i of ( z_j − z_i )
    S < 0 说明有更高的界面压在它下面 —— 叠置反了。
-   片元在场上过零处丢弃，透明边界就精确落在两个交界面的交线上。 */
+   片元在场上过零处丢弃，透明边界就精确落在两个交界面的交线上。
+
+   还要加上【对称的一半】：存在比它【老】的交界面 j 反而在它上面（z_j > z_i）。
+   这一半不是可有可无的：最上面那个交界面已经没有更高的界面了，
+   它被判透明的唯一机会就是这一条。少了它，上面那层尖灭（顶面切到下面去）之后，
+   那个顶面还会照画不误，把下面那层一直挡着 —— 看上去就是"该露下面地层的颜色，
+   显示的却还是上面地层的颜色"。
+   在叠置正常的模型里这一条永远不触发（老的本就都更低），所以不会误伤。 */
 function computeIfaceFields() {
   const n = S.ifaces.length;
   for (const I of S.ifaces) {
@@ -574,12 +568,22 @@ function computeIfaceFields() {
   if (!S.orderRule) return;
   for (let i=0;i<n;i++) {
     const si = S.ifaces[i].S, zi = S.ifaces[i].Z;
-    for (let j=i+1;j<n;j++) {
-      const zj = S.ifaces[j].Z;
-      for (let q=0;q<SZ;q++) {
-        const d = zj[q] - zi[q];
-        if (d < si[q]) si[q] = d;
+    for (let q=0;q<SZ;q++) {
+      let s1 = 1e9, s2 = 1e9, isMax = true;
+      const zq = zi[q];
+      for (let j=0;j<n;j++) {
+        if (j === i) continue;
+        const zj = S.ifaces[j].Z[q];
+        if (zj > zq) isMax = false;
+        if (j > i) { const d = zj - zq;  if (d < s1) s1 = d; }   // ① 更年轻的压在它下面
+        else       { const d = zq - zj;  if (d < s2) s2 = d; }   // ② 更老的压在它上面
       }
+      /* 【当下最高的那个界面永远不透明】。
+         它是这一处的地表面 —— 把它丢掉，那里就一个面都没有了，
+         于是"该露出的地层是透明的"，等于什么都没露出来。
+         所以①只在"它不是最高"的前提下才算数。
+         （叠置正常时这条不影响任何东西：最高的本来就是最上面那个界面。） */
+      si[q] = isMax ? 1e9 : Math.min(s1, s2);
     }
   }
 }
@@ -659,26 +663,24 @@ function buildStratum(k) {
       const at = pos.length/3;
       pos.push(x1,y1,zb1,  x2,y2,zb2,  x2,y2,zt2);
       pos.push(x1,y1,zb1,  x2,y2,zt2,  x1,y1,zt1);
-      /* 侧壁的场有三种选法（面板「侧壁透明」）：
-         match —— 和顶/底面【同一个判据、同样二值】：只要该柱上层或下层那一面被判透明，
-                  整条柱子就透。侧壁与俯视图/仰视图严格对上。
-         taper —— 把同一个规则写成沿高度的连续版本 f(z) = min_{j>k}(z_j) − z，
-                  这是斜率 −1 的直线，两端正好落在两个界面上：
-                     下沿 z=z_k      → f = bot.S
-                     上沿 z=z_{k+1}  → f = min(0, top.S)   （+∞ 哨兵在这个高度上真值是 0）
-                  两端同号（含恰好相切）就实心；只有一端为负时是楔形，不会贯穿。
-         solid —— 侧壁完全不参与规则。
-         注：上沿那个 0 是有依据的 —— 最上面那个界面到自己的间距恰好是 0；
-         曾经用一个「模型高程跨度」的自由尺度硬凑，那是错的，已删除。 */
+      /* 侧壁的场 = 这一柱里【某个高度离控制它的那个更高界面还有多远】：
+            f(z) = min over j>k of ( z_j ) − z
+         这是关于 z 的一条斜率恒为 −1 的直线，两个端点正好落在上下两个界面上：
+            下沿 z = z_k      →  f = bot.S
+            上沿 z = z_{k+1}  →  f = min(0, top.S)
+         三角面的两个顶点就在这两端，所以线性插值出来的就是这条直线本身。
+         于是侧壁与顶面/底面【在两端严格一致】：
+            底面透明（bot.S < 0）→ 下沿透明；
+            顶面透明（top.S < 0）→ 上沿透明。
+         两端同号（含恰好相切、尖灭）就整条实心；只有一端为负时是一条【楔形】，
+         在相切处收拢到零；两端都为负才整条贯穿。
+
+         上沿那个 min(0, ·)：最上面那个界面若没有更高的界面压着，top.S 为正，
+         而几何上它到自己的间距恰好是 0，所以取 0 是有依据的（不是凑的数）。
+         现在最上面那个界面的场已经因为对称规则变成有限值了，
+         这里 min(0, ·) 依然是对的：正值一律折到 0。 */
       const tf = q => { const s = top.S[q]; return s < 0 ? s : 0; };
-      let th;
-      if (S.wallMode === 'solid') th = 1e9;
-      else if (S.wallMode === 'taper')
-        th = [bot.S[q1], bot.S[q2], tf(q2), bot.S[q1], tf(q2), tf(q1)];
-      else {
-        const m1 = Math.min(bot.S[q1], top.S[q1]), m2 = Math.min(bot.S[q2], top.S[q2]);
-        th = [m1, m2, m2, m1, m2, m1];
-      }
+      const th = [bot.S[q1], bot.S[q2], tf(q2), bot.S[q1], tf(q2), tf(q1)];
       for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
       for (let u=0;u<6;u++) idx.push(at+u);
     }
@@ -729,6 +731,12 @@ function buildBase() {
   const Lm = mapL(), n = NS+1, z0 = baseZ();
   const pos=[], nrm=[], col=[], idx=[], sA=[];
   const c = S.baseColor.map(v=>v/255);
+  /* 该柱上所有界面里最低的那个高程：基底的上界 */
+  const cminAt = (q) => {
+    let lo = Infinity;
+    for (const I of S.ifaces) if (I.Z && I.Z[q] < lo) lo = I.Z[q];
+    return isFinite(lo) ? lo : bot.Z[q];
+  };
   const quad = (pts, nx, ny, nz, sArr) => {
     const at = pos.length/3;
     for (let t=0;t<pts.length;t++) {
@@ -747,15 +755,19 @@ function buildBase() {
       /* 基底的切面【必须参与规则】，否则交界面上有更高的界面压下来时，
          上面的地层会一直探到基底的深度范围里，两张切面共面重叠 ——
          看上去就是一片竖条纹的 z-fighting（蓝的和基底的深棕色叠在一起）。
-         这里同样是同一条直线 f(z) = min over j>=1 ( z_j ) − z：
-             上沿 z = z0_bot（基底的顶=最低的那个交界面）→ f = bot.S
-             下沿 z = 地面高程                        → f = C − 地面高程
-         其中 C = 该柱上最低的更高界面高程。f 在 z = C 处过零，
-         也就是说【C 以上的那截基底切面被丢掉】—— 正好是重叠的那一截。
-         基底的判据天生是沿高度的（重叠发生在某个高度以上），
-         所以它固定用这个渐变写法，不跟随面板上的「侧壁透明」模式。 */
-      const t1 = bot.S[q1], t2 = bot.S[q2];
-      const b1 = t1 + bot.Z[q1] - z0, b2 = t2 + bot.Z[q2] - z0;
+         这里同样是同一条直线 f(z) = Cmin − z：
+             Cmin = 该柱上【所有界面里最低的那个】高程
+             f 在 z = Cmin 处过零，也就是【Cmin 以上的那截基底切面被丢掉】
+             —— 正好是被上面地层占住的那一截。
+         直接用几何上的 Cmin 而不是 ifaces[0] 的场：那个场现在会因为
+         "最高的界面永不透明"的约束被抬成正数，拿它算会被带偏。
+         叠置正常时 Cmin 就是 ifaces[0] 自己，上沿场恰好是 0 → 保持实心。 */
+      /* 关掉规则开关时，基底也恢复全实心（代价是共面重叠的 z-fighting 会回来，
+         那本来就是"关掉规则"应有的样子）。 */
+      const cq1 = cminAt(q1), cq2 = cminAt(q2);
+      const on = S.orderRule;
+      const t1 = on ? cq1 - bot.Z[q1] : 1e9, t2 = on ? cq2 - bot.Z[q2] : 1e9;
+      const b1 = on ? cq1 - z0         : 1e9, b2 = on ? cq2 - z0         : 1e9;
       quad([[x1,y1,z0],[x2,y2,z0],[x2,y2,bot.Z[q2]],
             [x1,y1,z0],[x2,y2,bot.Z[q2]],[x1,y1,bot.Z[q1]]], nx, ny, 0,
            [b1, b2, t2, b1, t2, t1]);
@@ -1692,10 +1704,6 @@ for (const id in cbs) {
   el.addEventListener('change', () => { S[cbs[id]] = el.checked; after(false); });
 }
 const on = (id, fn) => document.getElementById(id).addEventListener('click', fn);
-/* 侧壁透明的三种判法（见 buildStratum 里的注释） */
-document.getElementById('cWall').addEventListener('change', e => {
-  S.wallMode = e.target.value; after(false);
-});
 /* 交线颜色 / 不透明度走 uniform，改它们只需重绘，不必重建几何 */
 document.getElementById('cInterColor').addEventListener('input', e => {
   const h = e.target.value;
@@ -1772,7 +1780,7 @@ function snapshot() {
                color: S.contourColor.slice(), alpha: S.contourAlpha },
     map: { mode: S.mapMode, contour: S.mapContour, inter: S.mapInter,
            dragSens: S.dragSens },
-    orderRule: S.orderRule, wallMode: S.wallMode, showIface: S.showIface,
+    orderRule: S.orderRule, showIface: S.showIface,
     base: { show: S.showBase, depth: S.baseDepth, color: S.baseColor.slice() },
     view: { az: camAz, el: camEl, dist: camDist },
     // 交界面自下而上；地层数 = 交界面数 − 1，strata[k] 位于 ifaces[k] 与 ifaces[k+1] 之间
@@ -1861,10 +1869,7 @@ function loadText(text) {
     S.orderRule = d.orderRule;
     document.getElementById('cRule').checked = S.orderRule;
   }
-  if (d.wallMode === 'match' || d.wallMode === 'taper' || d.wallMode === 'solid') {
-    S.wallMode = d.wallMode;
-    document.getElementById('cWall').value = S.wallMode;
-  }
+
   if (typeof d.showIface === 'boolean') {
     S.showIface = d.showIface;
     document.getElementById('cIface').checked = S.showIface;
