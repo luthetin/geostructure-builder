@@ -163,7 +163,9 @@ class Ev { constructor(t){ this.type=t; } }
 const winEl = new El("window");
 winEl.devicePixelRatio = 1;
 
-const sandbox = { document: doc, window: winEl, requestAnimationFrame: ()=>{}, console, Event: Ev };
+const sandbox = { document: doc, window: winEl, requestAnimationFrame: ()=>{}, console, Event: Ev,
+  /* 真浏览器里有定时器（面板折叠后的"再量一次画布尺寸"用到），沙箱也得给 */
+  setTimeout: (f)=>{ if (typeof f === "function") f(); return 0; }, clearTimeout: ()=>{} };
 const epilogue = `
 globalThis.__api = {
   S, SPACING, NS, SZ, MAT_CR, MAT_BS, evalSurf, mapL, mat,
@@ -1841,6 +1843,31 @@ console.log("\n─── Ic. 拖动期间的重建（性能优化不能破坏规
     check("松手后各地层的场也刷新了（没留下复用时的旧场）",
           stale === 0 && checked > 0, `${checked} 个顶点里 ${stale} 个仍是旧判定`);
   }
+}
+
+/* ============================================================ Fp */
+console.log("\n─── Fp. 左右面板折叠（宽屏）───");
+{
+  check("初始两块面板都展开",
+        !doc.body.classList.contains('noLeft') && !doc.body.classList.contains('noRight'));
+  const l = doc.getElementById('edgeL'), r = doc.getElementById('edgeR');
+  check("左右各有一颗折叠按钮", !!l && !!r && l.textContent === '◀' && r.textContent === '▶',
+        `${l.textContent} / ${r.textContent}`);
+  l.dispatchEvent({ type:'click', target:l });
+  check("点左侧按钮：折起左侧面板、箭头翻向",
+        S.noLeft === true && doc.body.classList.contains('noLeft') && l.textContent === '▶',
+        `noLeft=${S.noLeft}，箭头 ${l.textContent}`);
+  check("右侧不受影响", !doc.body.classList.contains('noRight'));
+  l.dispatchEvent({ type:'click', target:l });
+  check("再点一次展开", S.noLeft === false && !doc.body.classList.contains('noLeft') && l.textContent === '◀');
+  r.dispatchEvent({ type:'click', target:r });
+  check("点右侧按钮：折起平面图面板",
+        S.noRight === true && doc.body.classList.contains('noRight') && r.textContent === '◀',
+        `noRight=${S.noRight}，箭头 ${r.textContent}`);
+  r.dispatchEvent({ type:'click', target:r });
+  check("右侧也恢复", S.noRight === false && !doc.body.classList.contains('noRight'));
+  check("折叠状态不进存档（只是界面偏好）",
+        !('noLeft' in (api.snapshot() || {})) && !('noRight' in (api.snapshot() || {})));
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);

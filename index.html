@@ -147,6 +147,18 @@ a:hover{border-bottom-color:var(--accent)}
 *::-webkit-scrollbar-thumb:hover{background:#33465f}
 *::-webkit-scrollbar-track{background:transparent}
 
+/* ============ 左右面板折叠（宽屏用） ============
+   窄屏走抽屉那套（见下面的媒体查询），这里的两颗按钮在窄屏隐藏。 */
+  #edgeL,#edgeR{position:absolute;top:10px;z-index:25;display:none;
+    width:36px;height:36px;border-radius:10px;border:1px solid var(--line2);
+    background:rgba(15,21,32,.9);color:var(--ink2);font-size:15px;line-height:1;
+    cursor:pointer;padding:0;backdrop-filter:blur(6px);box-shadow:0 6px 18px -10px #000}
+  #edgeL{left:10px} #edgeR{right:10px}
+  #edgeL:hover,#edgeR:hover{border-color:var(--accent);color:var(--accent)}
+  #ui,#side{transition:flex-basis .18s ease,width .18s ease,padding .18s ease}
+  body.noLeft  #ui  {flex:0 0 0;width:0;padding:0;border-right:0;overflow:hidden}
+  body.noRight #side{flex:0 0 0;width:0;padding:0;border-left:0;overflow:hidden}
+  @media (min-width:821px){ #edgeL,#edgeR{display:block} }
 /* ============ 手机 / 平板 ============
    窄屏：左右两块面板收成【抽屉】，画布占满；左上角一个 ☰ 开关，
    点画布空白处也会自动收起。宽屏（平板横屏）保持原样，只是把侧栏压窄。 */
@@ -347,6 +359,8 @@ a:hover{border-bottom-color:var(--accent)}
   <div id="stage">
     <canvas id="gl"></canvas>
     <div id="labels"></div>
+    <button id="edgeL" title="折叠 / 展开左侧面板">◀</button>
+    <button id="edgeR" title="折叠 / 展开右侧平面图">▶</button>
   </div>
 
   <aside id="side">
@@ -414,6 +428,7 @@ const S = {
   showBase: false, baseDepth: 250, baseColor: [92,88,80],
   /* 地层柱里哪些行被收起来了（只存在本次会话，不写进存档） */
   folded: new Set(),
+  noLeft: false, noRight: false,     // 左右面板折叠状态（同样不写进存档）
 };
 const mapL = () => (S.res - 1) * SPACING;
 const mat  = () => S.surf === 'interp' ? MAT_CR : MAT_BS;
@@ -2396,6 +2411,20 @@ document.getElementById('cContourInt').addEventListener('input', e => {
   document.getElementById('cContourInt_v').textContent = S.contourInt + ' m';
   rebuild(false); render(); setInfo();
 });
+/* 左右面板折叠：只切一个 class，然后重新量画布尺寸（画布的缓冲大小是按 clientWidth 定的）。
+   过渡动画 180 ms，所以稍后再量一次，免得量到动画中间的值。 */
+function applyPanelFold() {
+  document.body.classList.toggle('noLeft', !!S.noLeft);
+  document.body.classList.toggle('noRight', !!S.noRight);
+  const l = document.getElementById('edgeL'), r = document.getElementById('edgeR');
+  if (l) l.textContent = S.noLeft ? '▶' : '◀';
+  if (r) r.textContent = S.noRight ? '◀' : '▶';
+  const relayout = () => { resize(); render(); };
+  relayout();
+  setTimeout(relayout, 220);
+}
+document.getElementById('edgeL').addEventListener('click', () => { S.noLeft  = !S.noLeft;  applyPanelFold(); });
+document.getElementById('edgeR').addEventListener('click', () => { S.noRight = !S.noRight; applyPanelFold(); });
 /* 模型名称：只改标题与信息栏，不用重建几何 */
 document.getElementById('cModelName').addEventListener('input', e => {
   S.modelName = e.target.value;
@@ -2726,6 +2755,7 @@ buildStratumList();
 rebuild(true);
 setInfo();
 render();
+applyPanelFold();          // 让折叠按钮的箭头一开始就是对的（放在首帧之后，避免拿着空场景去重排）
 
 function loop() {
   /* 【兜底】如果鼠标在窗口外松开、或者事件丢了，interacting 会一直是 true，
