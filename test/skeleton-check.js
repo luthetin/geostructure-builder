@@ -1647,6 +1647,19 @@ console.log("\n─── Pz. 内置预设模型 ───");
   check("预设 JSON 能解析，且与源文件一致（19 个交界面 / 18 个地层）",
         d0.format === 'strata-editor' && d0.ifaces.length === 19 && d0.strata.length === 18,
         `${d0.ifaces.length} 交界面 / ${d0.strata.length} 地层，name="${d0.name}"`);
+  /* 【两份必须一致】：预设既内嵌在 HTML 里（离线可用），又在 presets/ 里放了一份源文件。
+     两边一改就容易漏，所以让测试盯着。 */
+  {
+    const srcPath = path.join(__dirname, '..', 'presets', d0.name + '.json');
+    if (fs.existsSync(srcPath)) {
+      const src = JSON.parse(fs.readFileSync(srcPath, 'utf8'));
+      const a = JSON.stringify(src), b = JSON.stringify(d0);
+      check("内嵌预设与 presets/ 源文件内容一致（改预设时不会只改一处）",
+            a === b, a === b ? `${a.length} 字节两边相同` : `不一致：源文件 ${a.length} / 内嵌 ${b.length}`);
+    } else {
+      check("presets/ 下有对应的源文件", false, `找不到 ${srcPath}`);
+    }
+  }
 
   const sel = doc.getElementById('cPreset');
   check("下拉里有占位项和预设项", /选择预设/.test(sel.innerHTML) && /预设1/.test(sel.innerHTML),
