@@ -109,6 +109,22 @@ select:focus,input[type=text]:focus{outline:none;border-color:var(--accent);box-
 .l2 input[type=checkbox]{accent-color:var(--accent);margin:0}
 .ordlab{font-size:10.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
 .thk{font-size:10.5px;color:var(--muted);flex:1;min-width:0}
+/* ============ 折叠 ============
+   · 每个交界面行 / 地层行左侧一个小三角，收起时只留第一行（名称/颜色/关键数字）
+   · legend 也可以点：整个「地层（层面）」区块能收起来，22 层的时候很省地方 */
+  .foldbtn{flex:0 0 auto;width:18px;height:18px;padding:0;border:0;background:none;cursor:pointer;
+    color:var(--muted);font-size:10px;line-height:18px;text-align:center;border-radius:4px}
+  .foldbtn:hover{color:var(--accent);background:rgba(56,214,208,.10)}
+  .layer.folded .l2,.ifacerow.folded .l2{display:none}
+  .layer.folded,.ifacerow.folded{border-color:var(--line)}
+  .foldbar{display:flex;gap:6px;margin:2px 0 7px}
+  .foldbar button{font:inherit;font-size:11px;padding:3px 10px;border:1px solid var(--line2);
+    background:var(--panel2);color:var(--ink2);border-radius:7px;cursor:pointer}
+  .foldbar button:hover{border-color:var(--accent);color:var(--accent)}
+  legend{cursor:pointer;user-select:none}
+  legend::after{content:" ▾";font-size:9px;color:var(--muted)}
+  fieldset.collapsed>legend::after{content:" ▸"}
+  fieldset.collapsed>:not(legend){display:none}
 /* 交界面行：夹在地层行之间，像地层柱上的分界线 */
 .ifacerow{padding:5px 7px;margin:3px 0;border-top:1px solid var(--line);
   border-bottom:1px solid var(--line);background:#0c1320;font-size:11.5px}
@@ -204,6 +220,10 @@ a:hover{border-bottom-color:var(--accent)}
 
     <fieldset>
       <legend>地层（层面）</legend>
+      <div class="foldbar">
+        <button id="bFoldAll" title="把所有地层与交界面收成一行">全部收起</button>
+        <button id="bUnfoldAll" title="全部展开">全部展开</button>
+      </div>
       <div id="layerList"></div>
       <div class="btns"><button id="bAddLayer">＋ 新建地层</button></div>
       <div class="note">
@@ -392,6 +412,8 @@ const S = {
   mapMode: 'color', mapContour: false, mapInter: false, mapInterLid: true,
   dragSens: 0.3,
   showBase: false, baseDepth: 250, baseColor: [92,88,80],
+  /* 地层柱里哪些行被收起来了（只存在本次会话，不写进存档） */
+  folded: new Set(),
 };
 const mapL = () => (S.res - 1) * SPACING;
 const mat  = () => S.surf === 'interp' ? MAT_CR : MAT_BS;
@@ -2111,6 +2133,28 @@ const stratumThick = (k) => {
 /* 列出地层柱：自上而下 = 最新 → 最老。
    每一层是一个【地层】（颜色/透明度/显隐/删除），地层之间是【交界面】；
    点交界面的圆钮就选中它，骨架随之显示、可以拖控制点。 */
+/* 收起 / 展开一行：只切 class 与箭头，不重建列表（重建会丢掉输入焦点）。
+   折叠状态记在 S.folded 里（键：i3 / s2），所以列表重建后仍然记得。 */
+function bindFold(d, key) {
+  const btn = d.querySelector('.foldbtn');
+  if (!btn) return;
+  d._foldBtn = btn;                       // 方便测试拿到它（浏览器里就是那个三角按钮）
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const now = !S.folded.has(key);
+    if (now) S.folded.add(key); else S.folded.delete(key);
+    d.classList.toggle('folded', now);
+    btn.textContent = now ? '▸' : '▾';
+  });
+}
+function setAllFolded(folded) {
+  S.folded.clear();
+  if (folded) {
+    for (let i=0;i<S.ifaces.length;i++) S.folded.add('i'+i);
+    for (let k=0;k<S.strata.length;k++) S.folded.add('s'+k);
+  }
+  buildStratumList();
+}
 function buildStratumList() {
   const box = document.getElementById('layerList');
   box.innerHTML = '';
@@ -2123,10 +2167,12 @@ function buildStratumList() {
   const ifaceRow = (i) => {
     const I = S.ifaces[i];
     const d = document.createElement('div');
-    d.className = 'ifacerow' + (i===S.active ? ' on' : '');
+    const folded = S.folded.has('i'+i);
+    d.className = 'ifacerow' + (i===S.active ? ' on' : '') + (folded ? ' folded' : '');
     const mz = meanZ(I);
     d.innerHTML =
       '<div class="l1">' +
+        `<button class="foldbtn" title="收起 / 展开">${folded ? '▸' : '▾'}</button>` +
         `<input type="radio" name="actI" ${i===S.active?'checked':''}>` +
         `<input type="color" value="${hexOf(I.color)}">` +
         `<input type="text" value="${I.name.replace(/"/g,'&quot;')}">` +
@@ -2141,6 +2187,7 @@ function buildStratumList() {
     const nm  = d.querySelector('input[type=text]');
     const op  = d.querySelector('input[type=range]');
     const vis = d.querySelector('input[type=checkbox]');
+    bindFold(d, 'i'+i);
     d.querySelector('input[type=radio]').addEventListener('change', () => {
       S.active = i; selSet.clear(); buildStratumList(); rebuild(false); render(); setInfo();
     });
@@ -2161,10 +2208,12 @@ function buildStratumList() {
   const stratumRow = (k) => {
     const st = S.strata[k];
     const d = document.createElement('div');
-    d.className = 'layer';
+    const folded = S.folded.has('s'+k);
+    d.className = 'layer' + (folded ? ' folded' : '');
     const th = stratumThick(k);
     d.innerHTML =
       '<div class="l1">' +
+        `<button class="foldbtn" title="收起 / 展开">${folded ? '▸' : '▾'}</button>` +
         `<input type="color" value="${hexOf(st.color)}">` +
         `<input type="text" value="${st.name.replace(/"/g,'&quot;')}">` +
         `<span class="ordlab">均厚</span>` +
@@ -2180,6 +2229,7 @@ function buildStratumList() {
     const nm  = d.querySelector('input[type=text]');
     const op  = d.querySelector('input[type=range]');
     const vis = d.querySelector('input[type=checkbox]');
+    bindFold(d, 's'+k);
     col.addEventListener('input', () => {
       st.color = [1,3,5].map(k2 => parseInt(col.value.substr(k2,2),16));
       rebuild(false); render();
@@ -2308,7 +2358,13 @@ document.getElementById('cDragSens').addEventListener('input', e => {
   document.getElementById('cDragSens_v').textContent = S.dragSens.toFixed(2);
   updateSensNote();
 });
-on('bAddLayer', () => { addStratum(); selSet.clear(); buildStratumList(); after(true); });
+on('bFoldAll',   () => setAllFolded(true));
+on('bUnfoldAll', () => setAllFolded(false));
+/* 字段集标题也能点：整个区块收起来（22 层的时候很省地方） */
+for (const fs of document.querySelectorAll('fieldset')) {
+  const lg = fs.querySelector('legend');
+  if (lg) lg.addEventListener('click', () => fs.classList.toggle('collapsed'));
+}on('bAddLayer', () => { addStratum(); selSet.clear(); buildStratumList(); after(true); });
 on('bValley', () => { seedIface(S.ifaces[S.active],'valley'); after(true); });
 on('bHills',  () => { seedIface(S.ifaces[S.active],'hills');  after(true); });
 on('bFlat',   () => { seedIface(S.ifaces[S.active],'flat');   after(false); });

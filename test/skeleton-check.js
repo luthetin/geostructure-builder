@@ -89,10 +89,14 @@ class El {
   constructor(tag, id) {
     this.tagName=String(tag).toUpperCase(); this.id=id||""; this._ls={}; this.style={};
     this.textContent=""; this._html=""; this.value=""; this.checked=false; this.type="text";
-    this.name=""; this.children=[]; this.className="";
+    this.name=""; this.children=[];
     this.clientWidth=1000; this.clientHeight=800; this.width=1000; this.height=800;
     this._cls = new Set();
   }
+  /* className 与 classList 必须是同一份存储 —— 真实 DOM 里它们就是同一件事。
+     之前是两套（字符串 + Set），于是 classList.toggle 改了 Set、读 className 却看不到。 */
+  get className(){ return [...this._cls].join(' '); }
+  set className(v){ this._cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
   /* 抽屉面板靠 classList 开合，假 DOM 得跟上（只实现用到的那几个方法） */
   get classList(){
     const s = this._cls;
@@ -108,8 +112,19 @@ class El {
   dispatchEvent(e){ for(const f of this._ls[e.type]||[]) f.call(this,e); return true; }
   appendChild(c){ this.children.push(c); return c; }
   querySelectorAll(){ return []; }
-  querySelector(){ return new El("div"); }
-  set innerHTML(v){ this._html=v; } get innerHTML(){ return this._html; }
+  /* 按选择器给一个带 class 的壳，并缓存：同一个元素上问两次拿到的是同一个对象。
+     真实浏览器里 innerHTML 会被解析成真节点，这里够用来跑事件与文本赋值。 */
+  querySelector(sel){
+    this._qs = this._qs || {};
+    if (this._qs[sel]) return this._qs[sel];
+    const el = new El("div");
+    el.className = String(sel).replace(/^[.#]/, '');
+    this._qs[sel] = el;
+    return el;
+  }
+  /* 真实 DOM 里给 innerHTML 赋值会替换全部子节点；这里至少要支持置空，
+     否则每次 buildStratumList() 重建都会往 children 里叠加，行数越数越多。 */
+  set innerHTML(v){ this._html=v; if (v === "") this.children = []; } get innerHTML(){ return this._html; }
   /* '2d' 给真的假 2D 上下文，其余（webgl）给假 GL */
   getContext(kind){ if (kind === '2d') { if (!this._c2d) this._c2d = new Ctx2D(); return this._c2d; }
                     return fakeGL; }
@@ -157,7 +172,7 @@ globalThis.__api = {
   buildStratum, buildIfaceSurface, buildIntersections, topIface, baseZ,
   stitchContours, emitRibbon, smoothPoly, polysToSegs, sampleSurface,
   rebuild, render, zRange, camMVP, camEye, project, activeCtrl, pick, worldPerPixel,
-  PRESETS, loadPreset,
+  PRESETS, loadPreset, setAllFolded,
   exposedBandXYZ, bandColor,
   FS_SURF, drawMap, snapshot, loadText, selSet, buildStratumList, fileBaseName, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
@@ -1687,6 +1702,52 @@ console.log("\n─── Pz. 内置预设模型 ───");
         `value="${sel.value}"`);
   check("载入后地层柱列表跟着重建", api.buildStratumList !== undefined,
         `界面列表已刷新`);
+}
+
+/* ============================================================ Fd */
+console.log("\n─── Fd. 地层柱折叠 ───");
+{
+  /* 22 个地层的预设，面板一层两行、长到两千多像素，所以要能收起。
+     收起只藏第二行（不透明度/显隐），第一行（颜色/名称/厚度）始终可见。 */
+  reset([(x,y)=>600, (x,y)=>900, (x,y)=>1200]);
+  api.buildStratumList();
+  const box = doc.getElementById('layerList');
+  const rows = () => box.children.filter(c => /^(layer|ifacerow)/.test(c.className));
+  const foldedCount = () => rows().filter(c => /folded/.test(c.className)).length;
+  check("地层柱生成了行（n 个交界面夹出 n−1 个地层）", rows().length === 3 + 2,
+        `${rows().length} 行 = 2 地层 + 3 交界面`);
+
+  api.setAllFolded(true);
+  check("「全部收起」把所有行都标成 folded",
+        rows().length > 0 && foldedCount() === rows().length,
+        `${foldedCount()} / ${rows().length}`);
+  check("收起状态记在 S.folded 里（键形如 i0 / s2）",
+        S.folded.has('i0') && S.folded.has('i2') && S.folded.has('s0') && S.folded.has('s1'),
+        `${S.folded.size} 个键`);
+
+  api.setAllFolded(false);
+  check("「全部展开」清空", foldedCount() === 0 && S.folded.size === 0,
+        `${foldedCount()} 行仍收着`);
+
+  /* 单行点击：点那一行的三角按钮。浏览器里就是那个按钮；
+     假 DOM 里 bindFold 把壳挂在行的 _foldBtn 上，点到的是同一段逻辑。 */
+  const first = rows()[0];
+  const clickFold = el => el.dispatchEvent({ type:'click', target:el, stopPropagation(){} });
+  clickFold(first._foldBtn);
+  check("点一行的三角只收这一行", /folded/.test(first.className) && foldedCount() === 1,
+        `${foldedCount()} 行收着`);
+  check("箭头跟着变（收起 ▸）", first._foldBtn.textContent === '▸',
+        `箭头 "${first._foldBtn.textContent}"`);
+  clickFold(first._foldBtn);
+  check("再点一次展开", foldedCount() === 0 && first._foldBtn.textContent === '▾',
+        `${foldedCount()} 行收着`);
+
+  /* 重建列表后折叠状态要记得（比如改个颜色就会重建） */
+  api.setAllFolded(true);
+  api.buildStratumList();
+  check("列表重建后折叠状态仍然记得", foldedCount() === rows().length,
+        `${foldedCount()} / ${rows().length}`);
+  api.setAllFolded(false);
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
