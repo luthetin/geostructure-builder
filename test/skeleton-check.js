@@ -172,9 +172,10 @@ globalThis.__api = {
   buildStratum, buildIfaceSurface, buildIntersections, topIface, baseZ,
   stitchContours, emitRibbon, smoothPoly, polysToSegs, sampleSurface,
   rebuild, render, zRange, camMVP, camEye, project, activeCtrl, pick, worldPerPixel,
-  PRESETS, loadPreset, setAllFolded,
+  PRESETS, loadPreset, setAllFolded, buildContours, drawMap, setInfo,
+  beginInteract, endInteract, scheduleRebuild, get interacting(){ return interacting; },
   exposedBandXYZ, bandColor,
-  FS_SURF, drawMap, snapshot, loadText, selSet, buildStratumList, fileBaseName, fileBaseName,
+  FS_SURF, snapshot, loadText, selSet, buildStratumList, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
   get meshStrata(){ return meshStrata; }, get meshWire(){ return meshWire; },
   get meshBase(){ return meshBase; },
@@ -1749,6 +1750,5 @@ console.log("\n─── Fd. 地层柱折叠 ───");
         `${foldedCount()} / ${rows().length}`);
   api.setAllFolded(false);
 }
-
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);

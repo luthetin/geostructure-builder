@@ -727,37 +727,46 @@ function evalIface(I) {
    薄面会一直盖在露头带的颜色上。但地表面本来就不需要一张多余的薄面 ——
    它的面就是地表那个盖子本身（永远画、颜色按露头带），所以把那张薄面去掉之后，
    这一半就没有存在理由了，去掉它才满足"相交时最高次序那张要显示"。 */
+/* ⚠ 这两条场（交界面的 S、岩体的 C）以前是【每个界面各扫一遍全部界面】，
+   也就是 O(n²·SZ)：22 个界面时一次 rebuild 光这里就三百多毫秒，拖动直接卡死。
+   但软最小值是 log-sum-exp，而它是【可结合】的：
+
+       S_i(q) = z_i − soften·log( Σ_{j>i} e^(−z_j/soften) )
+       C_k(q) =          −soften·log( Σ_{j>k} e^(−z_j/soften) )
+
+   两个都是【后缀和】，从最上面一个界面往下递推就行 —— O(n·SZ)，一趟里全算出来，
+   不必每层再扫一遍。数值上先减去该柱的最小高程再取指数，t ∈ (0,1]，不会上下溢。 */
+let COF = null;                       // 岩体场：COF[k*SZ + q]
+function computeOrderFields() {
+  const n = S.ifaces.length, ns = S.strata.length;
+  const soften = Math.max(1, mapL()/NS);
+  if (!COF || COF.length !== ns*SZ) COF = new Float32Array(Math.max(1, ns*SZ));
+  const zs = S.ifaces.map(I => I.Z);
+  for (let q=0;q<SZ;q++) {
+    let zmin = Infinity;
+    for (let j=0;j<n;j++) { const z = zs[j][q]; if (z < zmin) zmin = z; }
+    let run = 0;                                  // run = Σ_{j>i} t_j
+    for (let i=n-1;i>=0;i--) {
+      const si = S.ifaces[i].S;
+      /* 走到 i 时，run 还只有 j>i 的那些项 —— 正好是 S_i 与 C_i 都要的后缀和 */
+      if (S.orderRule) {
+        /* S_i 是【高度差】：上面那些界面的软最小高度，减去本界面的高度 */
+        if (run > 0) si[q] = (zmin - soften*Math.log(run)) - zs[i][q];
+        else         si[q] = 1e9;                 // 上面没有更年轻的：永远画
+      }
+      if (i < ns) COF[i*SZ + q] = run > 0 ? zmin - soften*Math.log(run) : zs[i][q];
+      const t = Math.exp(-(zs[i][q] - zmin)/soften);
+      run += t;
+    }
+  }
+  return COF;
+}
 function computeIfaceFields() {
-  const n = S.ifaces.length;
   for (const I of S.ifaces) {
     if (!I.S || I.S.length !== SZ) I.S = new Float32Array(SZ);
     I.S.fill(1e9);
   }
-  if (!S.orderRule) return;
-  /* 只算「更年轻的界面压在它下面」，取最小。
-     —— 这条规则只作用在【交界面那张薄面】上。地层实体不参与（见 buildStratum）。
-
-     min 用【软最小值】，和岩体那条 C_k 同一个道理、同一个尺度：
-     硬 min 在"最小值换主人"的地方会折一下（实测这个模型上每个界面换
-     75~217 次），丢边界就在那些地方拐折起毛。软最小值是光滑的，折角被抹圆；
-     而且它恒 ≤ 硬 min —— 所以只会【多透明】、绝不会多显示，层序规则不会被破坏。 */
-  const soften = Math.max(1, mapL()/NS);
-  for (let i=0;i<n;i++) {
-    const si = S.ifaces[i].S, zi = S.ifaces[i].Z;
-    for (let q=0;q<SZ;q++) {
-      let m = Infinity, cnt = 0;
-      for (let j=i+1;j<n;j++) {                  // 只找【更年轻】的界面
-        const d = S.ifaces[j].Z[q] - zi[q];
-        if (d < m) m = d;
-        cnt++;
-      }
-      if (!cnt) { si[q] = 1e9; continue; }       // 最上面那张：没有更年轻的，永远画
-      if (!isFinite(m)) { si[q] = 1e9; continue; }
-      let sum = 0;
-      for (let j=i+1;j<n;j++) sum += Math.exp(-((S.ifaces[j].Z[q] - zi[q]) - m)/soften);
-      si[q] = m - soften*Math.log(sum);
-    }
-  }
+  computeOrderFields();
 }
 /* 地层的透明场 = 上下两个界面的场的【较小者】。
    注意：这个场已经【不参与渲染】了 —— 渲染时每个面用它所依附的那个界面的场
@@ -823,16 +832,11 @@ function buildStratum(k) {
      soften 取一个渲染网格步长。实测（截图那个模型）：
        拐折最大 36/22/9 m  →  15/7/9 m
        代价：平均只削掉 0.6 m，最坏一列 27.6 m（只在界面交叉处） */
-  const soften = Math.max(1, Lm/NS);
+  /* C_k 由 computeOrderFields() 用后缀和一趟算好（rebuild 里已经算过），这里直接取。
+     注意【不要在这里调用它】—— 那样每个地层都会重算一遍，22 层就是 22 趟，反而更慢。 */
+  if (!COF) computeOrderFields();
   const C = new Float32Array(SZ);
-  for (let q=0;q<SZ;q++) {
-    let m = Infinity;
-    for (let i=k+1;i<S.ifaces.length;i++) { const z = S.ifaces[i].Z[q]; if (z < m) m = z; }
-    if (!isFinite(m)) { C[q] = bot.Z[q]; continue; }
-    let s = 0;
-    for (let i=k+1;i<S.ifaces.length;i++) s += Math.exp(-(S.ifaces[i].Z[q] - m)/soften);
-    C[q] = m - soften*Math.log(s);
-  }
+  for (let q=0;q<SZ;q++) C[q] = COF[k*SZ + q];
   const thickAt = q => top.Z[q] - bot.Z[q];
   const fieldAt = (q, z) => {
     if (!S.orderRule) return 1e9;
@@ -1688,30 +1692,71 @@ function zRangeAll() {
   const [lo, hi] = zRange();
   return S.showBase ? [lo - S.baseDepth, hi] : [lo, hi];
 }
+/* 控制点没动过的界面不用重算曲面 —— 拖一个界面时，其余二十几张的求值全可以省掉。
+   用逐点比对判脏（res² = 81 个浮点，代价可以忽略），比到处记得打脏标记更不容易错。 */
+function ifaceChanged(I) {
+  const z = I.z;
+  if (!z) return false;
+  const ref = I._zRef;
+  if (!ref || ref.length !== z.length) { I._zRef = z.slice(); return true; }
+  for (let i=0;i<z.length;i++) if (z[i] !== ref[i]) { I._zRef = z.slice(); return true; }
+  return false;
+}
 function rebuild(fit) {
+  /* light = 拖动/旋转期间：只重建形状真正变了的东西，贵的（交线/等高线/平面图）留到松手再算 */
+  const light = interacting && !fit;
   dispose(meshWire); dispose(meshFill); dispose(meshHandles); dispose(meshSel);
   dispose(meshBase);
-  for (const m of meshStrata) dispose(m);
-  for (const m of meshIfaces) dispose(m);
+  /* ⚠ 这里【不能】先把所有地层/薄面都 dispose 掉：下面会复用没变的那些，
+     删了再复用就是用到已释放的显存。改为由新的构建流程负责旧网格的去留。 */
   for (const m of meshInter) dispose(m);
   for (const m of meshContour) dispose(m);
-  for (const I of S.ifaces) evalIface(I);
-  computeIfaceFields();
-  computeStratumFields();
-  meshStrata = S.strata.map((st, k) => st.vis ? buildStratum(k) : null);
+  /* 【代】号：曲面真的重算了才 +1。地层网格与界面薄面靠它判断能不能整块复用 ——
+     拖一个界面时其余二十几张的高程一个字没动，没必要重建（这是拖动跟手的关键）。 */
+  for (const I of S.ifaces) if (ifaceChanged(I)) { evalIface(I); I._gen = (I._gen|0) + 1; }
+  const genAll = S.ifaces.reduce((a,I) => a + (I._gen|0), 0);
+  /* 拖动期间先不重算透明场（它要 O(n·SZ)，是这时最大的一块）：界面与地层的形状照旧实时更新，
+     只有"哪里该透明"会滞后一两帧，松手时一次完整重建就恢复 —— 手感优先。 */
+  if (!light) { computeIfaceFields(); computeStratumFields(); }
+  /* 上/下界面的代号都没变、而且不是地表那层（地表顶面还要按交线切开，依赖全部界面），
+     就直接复用上一帧的网格 —— 位置、法线、颜色、索引、显存里的缓冲全都不用动。 */
+  meshStrata = S.strata.map((st, k) => {
+    const prev = meshStrata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
+    if (!st.vis) { if (prev) dispose(prev); return null; }
+    const isLid = (k === S.strata.length-1);
+    /* 只在【拖动期间】走复用：那时只会改高程，不会改颜色/透明度/开关。
+       平时仍然全量重建，保证任何参数改动都立刻反映到网格上。 */
+    const same = light && prev && !isLid && prev._genBot === (bot._gen|0) && prev._genTop === (top._gen|0)
+                 && prev._curv === S.curv && prev._rule === S.orderRule;
+    if (same) return prev;
+    if (prev) dispose(prev);                   // 要被替换掉的旧网格，显存归还得自己负责
+    const m = buildStratum(k);
+    m._genBot = bot._gen|0; m._genTop = top._gen|0;
+    m._curv = S.curv; m._rule = S.orderRule;
+    return m;
+  });
   /* 每张交界面都做一张薄面（包括最上面那张）。
      ⚠ 最上面那张薄面就是地表面本身、抬高 1.5 m 浮在地表盖子之上，
      俯视时它永远在最前面 —— 所以【它的不透明度会直接影响露头带颜色能不能看见】：
      想同时看到露头带，把这张界面的透明度调低。 */
-  meshIfaces = S.ifaces.map(I => (S.showIface && I.vis) ? buildIfaceSurface(I) : null);
+  meshIfaces = S.ifaces.map((I, i) => {
+    const prev = meshIfaces[i];
+    if (!(S.showIface && I.vis)) { if (prev) dispose(prev); return null; }
+    if (light && prev && prev._gen === (I._gen|0)) return prev;
+    if (prev) dispose(prev);
+    const m = buildIfaceSurface(I);
+    m._gen = I._gen|0;
+    return m;
+  });
   meshBase = S.showBase ? buildBase() : null;
   const A = S.ifaces[S.active];
   if (A) {
     const g = buildSkeletonOf(A);
     meshWire=g.wire; meshFill=g.fill; meshHandles=g.handles; meshSel=g.sel;
   } else { meshWire=meshFill=meshHandles=meshSel=null; }
-  meshInter = S.inter ? buildIntersections() : [];
-  meshContour = buildContours();
+  /* 交互期间跳过最贵的三样（交线、等高线），松手时 endInteract 会补一次完整重建 */
+  meshInter = (S.inter && !light) ? buildIntersections() : [];
+  meshContour = light ? [] : buildContours();
   const [lo,hi] = zRangeAll();
   camTarget = [mapL()/2, mapL()/2, (lo+hi)/2];
   /* 初始/复位视角：距离要按【画面宽高比】定。
@@ -1724,7 +1769,7 @@ function rebuild(fit) {
     camDist = Math.max(mapL()*1.95, needW);
     camInit = true;
   }
-  drawMap();                      // 平面图随编辑实时更新
+  if (!light) drawMap();          // 平面图也留到松手后画（带状着色那档要 160 ms）
 }
 
 /* ============================================================
@@ -1772,7 +1817,34 @@ const worldPerPixel = () => 2*camDist*Math.tan(21*D2R)/cv.clientHeight * S.dragS
 /* 空格 = 整个面上下平移；Shift = 多选；否则 = 拖动（选中多个时一起动） */
 let mode=null, dragIdx=-1, lastX=0, lastY=0, hoverIdx=-1, spaceDown=false;
 
+/* ============================================================
+   交互期的性能策略
+   ------------------------------------------------------------
+   22 个界面时一次完整重建要几百毫秒，而拖动时每个 mousemove 都会触发一次 ——
+   于是卡死。两条措施：
+     1) 每帧最多重建一次（requestAnimationFrame 合并掉多余的事件）；
+     2) 拖动/旋转/缩放期间只重建"看得见在动"的地层与交界面薄面，
+        交线、等高线、平面图这些贵的留到松手后再补一次完整重建。
+   两者都不改变最终结果，只是把中间帧的代价降下来。
+   ============================================================ */
+let interacting = false;     // 正在拖 / 转 / 缩放
+let rafPending = false;      // 本帧已排过一次重建
+function beginInteract() { interacting = true; }
+function endInteract() {
+  if (!interacting) return;
+  interacting = false;
+  rebuild(false); render(); setInfo();      // 松手后补一次完整的
+}
+function scheduleRebuild() {
+  if (rafPending) return;
+  rafPending = true;
+  const run = () => { rafPending = false; rebuild(false); render(); setInfo(); };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else run();                                // 没有 rAF（测试环境）就同步做
+}
+
 cv.addEventListener('mousedown', e => {
+  beginInteract();
   const r=cv.getBoundingClientRect();
   const mx=e.clientX-r.left, my=e.clientY-r.top;
   lastX=e.clientX; lastY=e.clientY;
@@ -1795,7 +1867,7 @@ cv.addEventListener('mousedown', e => {
   mode='orbit';
   if (selSet.size) { selSet.clear(); rebuild(false); render(); setInfo(); }
 });
-window.addEventListener('mouseup', () => { mode=null; dragIdx=-1; });
+window.addEventListener('mouseup', () => { mode=null; dragIdx=-1; endInteract(); });
 
 window.addEventListener('mousemove', e => {
   if (!mode) {
@@ -1821,14 +1893,14 @@ window.addEventListener('mousemove', e => {
     const dz = -(e.clientY-lastY)*worldPerPixel();
     lastY=e.clientY; lastX=e.clientX;
     for (const k of selSet) L.z[k] += dz;                 // 选中的点一起升降
-    rebuild(false); render(); setInfo();
+    scheduleRebuild();
 
   } else if (mode==='moveAll') {
     // 整个面沿 z 上下平移（与单点拖动同一套手感：上拖升高、下拖降低）
     const dz = -(e.clientY-lastY)*worldPerPixel();
     lastY=e.clientY; lastX=e.clientX;
     for (let q=0;q<L.z.length;q++) L.z[q] += dz;
-    rebuild(false); render(); setInfo();
+    scheduleRebuild();
   }
 });
 
@@ -1849,6 +1921,8 @@ window.addEventListener('keyup', e => {
 window.addEventListener('blur', () => { spaceDown = false; cv.style.cursor = 'crosshair'; });
 cv.addEventListener('wheel', e => {
   e.preventDefault();
+  beginInteract();
+  clearTimeout(cv._wheelT); cv._wheelT = setTimeout(endInteract, 160);
   camDist=Math.max(mapL()*0.4, Math.min(mapL()*4, camDist*Math.exp(e.deltaY*0.0011)));
   updateSensNote();
   render();
@@ -1896,11 +1970,11 @@ function moveTo(mx, my, dx, dy) {
   } else if (mode==='dragSel') {
     const dz = -dy*worldPerPixel();
     for (const k of selSet) L.z[k] += dz;
-    rebuild(false); render(); setInfo();
+    scheduleRebuild();
   } else if (mode==='moveAll') {
     const dz = -dy*worldPerPixel();
     for (let q=0;q<L.z.length;q++) L.z[q] += dz;
-    rebuild(false); render(); setInfo();
+    scheduleRebuild();
   }
   void mx; void my;
 }
@@ -1923,6 +1997,7 @@ const touchPoint = (t) => {
 };
 cv.addEventListener('touchstart', e => {
   e.preventDefault();
+  beginInteract();
   if (e.touches.length >= 2) {                       // 双指：进入捏合
     const a = e.touches[0], b = e.touches[1];
     tPinch = Math.hypot(a.clientX-b.clientX, a.clientY-b.clientY);
@@ -1956,7 +2031,7 @@ const endTouch = e => {
   if (e.touches && e.touches.length === 1) {          // 从双指放成单指：接着单指走
     tMode = 'one'; tLast = touchPoint(e.touches[0]); mode = null; return;
   }
-  tMode = null; tPinch = 0; mode = null; dragIdx = -1;
+  tMode = null; tPinch = 0; mode = null; dragIdx = -1; endInteract();
 };
 cv.addEventListener('touchend', endTouch);
 cv.addEventListener('touchcancel', endTouch);
