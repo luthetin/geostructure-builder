@@ -1642,28 +1642,37 @@ console.log("\n─── Pz. 内置预设模型 ───");
   check("页面里内嵌了预设，并读成了下拉列表",
         api.presets.length >= 1 && api.presets[0].name === '预设1',
         `${api.presets.length} 个：${api.presets.map(p=>p.name).join(", ")}`);
-  /* 直接验内嵌数据本身没坏（预设是数据，损坏了不该等到用户点了才发现） */
-  const d0 = JSON.parse(api.presets[0].json);
-  check("预设 JSON 能解析，且与源文件一致（19 个交界面 / 18 个地层）",
-        d0.format === 'strata-editor' && d0.ifaces.length === 19 && d0.strata.length === 18,
-        `${d0.ifaces.length} 交界面 / ${d0.strata.length} 地层，name="${d0.name}"`);
-  /* 【两份必须一致】：预设既内嵌在 HTML 里（离线可用），又在 presets/ 里放了一份源文件。
-     两边一改就容易漏，所以让测试盯着。 */
+  /* 逐个预设验：JSON 能解析、有对应的源文件、两边内容逐字节一致。
+     预设既内嵌在 HTML 里（离线可用），又在 presets/ 放了一份源文件 ——
+     两份最容易改漏一处，所以让测试盯着；也免得哪天多了一个预设却没人验。 */
   {
-    const srcPath = path.join(__dirname, '..', 'presets', d0.name + '.json');
-    if (fs.existsSync(srcPath)) {
-      const src = JSON.parse(fs.readFileSync(srcPath, 'utf8'));
-      const a = JSON.stringify(src), b = JSON.stringify(d0);
-      check("内嵌预设与 presets/ 源文件内容一致（改预设时不会只改一处）",
-            a === b, a === b ? `${a.length} 字节两边相同` : `不一致：源文件 ${a.length} / 内嵌 ${b.length}`);
-    } else {
-      check("presets/ 下有对应的源文件", false, `找不到 ${srcPath}`);
+    const bad = [], names = [];
+    for (const p of api.presets) {
+      let d;
+      try { d = JSON.parse(p.json); }
+      catch (err) { bad.push(`${p.name}: JSON 解析失败`); continue; }
+      names.push(`${p.name}(${d.ifaces.length}界面/${d.strata.length}地层)`);
+      if (d.format !== 'strata-editor' || d.strata.length !== d.ifaces.length - 1) {
+        bad.push(`${p.name}: 格式或地层数不对`);
+      }
+      const srcPath = path.join(__dirname, '..', 'presets', (d.name || p.name) + '.json');
+      if (!fs.existsSync(srcPath)) { bad.push(`${p.name}: 缺源文件 presets/${d.name}.json`); continue; }
+      const a = JSON.stringify(JSON.parse(fs.readFileSync(srcPath, 'utf8')));
+      if (a !== JSON.stringify(d)) bad.push(`${p.name}: 内嵌与源文件不一致`);
     }
+    check("每个预设都能解析、都有源文件、且内嵌与源文件一致",
+          api.presets.length >= 2 && bad.length === 0,
+          bad.length ? bad.join("；") : names.join("，"));
   }
+  const d0 = JSON.parse(api.presets[0].json);
+  check("预设1 仍是 19 个交界面 / 18 个地层",
+        d0.ifaces.length === 19 && d0.strata.length === 18,
+        `${d0.ifaces.length} 交界面 / ${d0.strata.length} 地层，name="${d0.name}"`);
 
   const sel = doc.getElementById('cPreset');
-  check("下拉里有占位项和预设项", /选择预设/.test(sel.innerHTML) && /预设1/.test(sel.innerHTML),
-        sel.innerHTML.slice(0, 80));
+  check("下拉里有占位项和预设项", /选择预设/.test(sel.innerHTML) && /预设1/.test(sel.innerHTML)
+        && /预设2/.test(sel.innerHTML),
+        sel.innerHTML.replace(/<[^>]+>/g, ' ').trim().slice(0, 60));
 
   /* 选中它 = 真的载入 */
   sel.value = '0';
