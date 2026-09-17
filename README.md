@@ -7,12 +7,12 @@
 
 把 `index.html` 下载下来双击就能用。不需要安装任何东西，不需要服务器。
 
-**在线版：https://luthetin.github.io/strata-skeleton/**（由 GitHub Pages 托管）
+**在线版：https://luthetin.github.io/geostructure-builder/**（由 GitHub Pages 托管）
 
 > **相关链接**
-> - 🌐 在线应用：<https://luthetin.github.io/strata-skeleton/>
-> - 💻 代码仓库：<https://github.com/luthetin/strata-skeleton>
-> - 👤 作者个人网站：<https://luthetin.github.io/> ｜ [这个项目的介绍页](https://luthetin.github.io/strata-skeleton.html)
+> - 🌐 在线应用：<https://luthetin.github.io/geostructure-builder/>
+> - 💻 代码仓库：<https://github.com/luthetin/geostructure-builder>
+> - 👤 作者个人网站：<https://luthetin.github.io/> ｜ [这个项目的介绍页](https://luthetin.github.io/geostructure-builder.html)
 
 ![界面](docs/screenshot.png)
 
