@@ -807,7 +807,7 @@ function stratumAlpha(k) {
 function buildStratum(k) {
   const st = S.strata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
   const Lm = mapL(), n = NS+1, NSq = NS*NS;
-  const pos=[], nrm=[], col=[], idx=[], sA=[];
+  const pos=[], nrm=[], col=[], idx=[], sA=[], qv=[];
   const base = st.color.map(v=>v/255);
   /* ---- 地层实体只有一个判据：一个界面之上，只能出现层序比它【高】的岩层 ----
         C_k(x,y) = min over i>k of （界面 i 的高程）
@@ -900,7 +900,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, top.Z[q]);
     nrm.push(top.NX[q], top.NY[q], top.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(isLid ? 1e9 : fieldAt(q, top.Z[q]));
+    sA.push(isLid ? 1e9 : fieldAt(q, top.Z[q])); qv.push(isLid ? 0xFFFF : q);
   }
   /* 跨带的格子记下来：它们的三角形要跳过，改由下面切开的多边形来画 */
   const cutCells = [];
@@ -918,7 +918,7 @@ function buildStratum(k) {
     pos.push(Lm*a/NS, Lm*b/NS, bot.Z[q]);
     nrm.push(-bot.NX[q], -bot.NY[q], -bot.NZ[q]);
     col.push(c[0],c[1],c[2],1);
-    sA.push(fieldAt(q, bot.Z[q]));
+    sA.push(fieldAt(q, bot.Z[q])); qv.push(q);
   }
   for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
     const p0=b*n+a, p1=p0+1, p2=p0+n, p3=p2+1;
@@ -942,6 +942,7 @@ function buildStratum(k) {
       const th = [fieldAt(q1, zb1), fieldAt(q2, zb2), fieldAt(q2, zt2),
                   fieldAt(q1, zb1), fieldAt(q2, zt2), fieldAt(q1, zt1)];
       for (let u=0;u<6;u++){ nrm.push(nx,ny,0); col.push(base[0],base[1],base[2],1); sA.push(th[u]); }
+      qv.push(q1,q2,q2,q1,q2,q1);
       for (let u=0;u<6;u++) idx.push(at+u);
     }
   };
@@ -1026,7 +1027,7 @@ function buildStratum(k) {
             pos.push(p.x, p.y, p.zk[nf-1]);
             nrm.push(nx, ny, nz);
             col.push(c[0],c[1],c[2],1);
-            sA.push(1e9);                             // 地表面永远画
+            sA.push(1e9); qv.push(0xFFFF);            // 地表面永远画
           }
           idx.push(at, at+1, at+2);                   // 绕序与顶面一致（从上看逆时针）
         }
@@ -1034,6 +1035,7 @@ function buildStratum(k) {
     }
   }
   const mmesh = mesh(pos,nrm,col,idx, sA);
+  mmesh._q = Uint16Array.from(qv);   // 每个顶点对应哪个格点（0xFFFF = 永远画）
   mmesh._cutFrom = cutFrom; mmesh._cutTo = pos.length/3;
   mmesh._cutCells = cutCells.length;
   return mmesh;
@@ -1702,6 +1704,31 @@ function ifaceChanged(I) {
   for (let i=0;i<z.length;i++) if (z[i] !== ref[i]) { I._zRef = z.slice(); return true; }
   return false;
 }
+/* 【只更新场属性】
+   拖动时地形网格可以整块复用（位置/法线/颜色/索引都没变），但网格里烘着"哪里该透明"
+   这个逐顶点场 —— 它依赖所有界面的高程，每帧都在变。所以复用时必须把这个场重算一遍
+   并【只重传这一个 float 属性】（21122 个数 / 84 KB），而不是整块网格重建（省一个数量级）。
+   顶点对应哪个格点记在 m._q 里；0xFFFF 表示"永远画"（地表顶盖与切开的多边形）。 */
+function updateStratumField(m, k) {
+  const bot = S.ifaces[k], top = S.ifaces[k+1];
+  const cof = COF, zs = m._pos, s = m._s, qv = m._q;
+  const on = S.orderRule;
+  for (let v=0; v<qv.length; v++) {
+    const q = qv[v];
+    if (!on || q === 0xFFFF) { s[v] = 1e9; continue; }
+    const z = zs[3*v+2];
+    const a = cof[k*SZ + q] - z, th = top.Z[q] - bot.Z[q];
+    s[v] = a < th ? a : th;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, m.sbuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, s);
+}
+function updateIfaceField(m, I) {
+  const s = m._s;
+  for (let q=0; q<s.length; q++) s[q] = I.S[q];
+  gl.bindBuffer(gl.ARRAY_BUFFER, m.sbuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, s);
+}
 function rebuild(fit) {
   /* light = 拖动/旋转期间：只重建形状真正变了的东西，贵的（交线/等高线/平面图）留到松手再算 */
   const light = interacting && !fit;
@@ -1730,7 +1757,7 @@ function rebuild(fit) {
        平时仍然全量重建，保证任何参数改动都立刻反映到网格上。 */
     const same = light && prev && !isLid && prev._genBot === (bot._gen|0) && prev._genTop === (top._gen|0)
                  && prev._curv === S.curv && prev._rule === S.orderRule;
-    if (same) return prev;
+    if (same) { updateStratumField(prev, k); return prev; }   // 形状没变，但透明场每帧都在变
     if (prev) dispose(prev);                   // 要被替换掉的旧网格，显存归还得自己负责
     const m = buildStratum(k);
     m._genBot = bot._gen|0; m._genTop = top._gen|0;
@@ -1744,7 +1771,7 @@ function rebuild(fit) {
   meshIfaces = S.ifaces.map((I, i) => {
     const prev = meshIfaces[i];
     if (!(S.showIface && I.vis)) { if (prev) dispose(prev); return null; }
-    if (light && prev && prev._gen === (I._gen|0)) return prev;
+    if (light && prev && prev._gen === (I._gen|0)) { updateIfaceField(prev, I); return prev; }
     if (prev) dispose(prev);
     const m = buildIfaceSurface(I);
     m._gen = I._gen|0;

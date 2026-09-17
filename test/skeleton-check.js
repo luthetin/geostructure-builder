@@ -1756,8 +1756,12 @@ console.log("\n─── Ic. 拖动期间的重建（性能优化不能破坏规
 {
   /* 性能优化引入了"拖动时只重建变了的、透明场延后"的策略，这条路径测试里以前
      完全没走过，所以先把它钉死：拖一次、松手，规则与各层的场都必须恢复完好。 */
-  const [, I] = reset([(x,y)=>600, (x,y)=>1200, (x,y)=>100 + 0.35*x]);
-  S.active = 1;
+  /* 4 个界面（3 层），拖【最上面】那张：下面两层的形状没变、会被整块复用，
+     但它们的透明场随所有界面高程而变 —— 这正是"复用了网格却没更新场"会露馅的地方。
+     （只有 2 层时，拖中间那张会让两层都重建，走不到复用路径，测试会白过。） */
+  const ii4 = reset([(x,y)=>600, (x,y)=>1000, (x,y)=>1400, (x,y)=>120 + 0.4*x]);
+  const I = ii4[3];
+  S.active = 3;
   const ruleBad = () => {
     const ii = S.ifaces; let bad = 0;
     for (let q=0;q<SZ;q++) for (let i=0;i<ii.length;i++) {
@@ -1774,15 +1778,43 @@ console.log("\n─── Ic. 拖动期间的重建（性能优化不能破坏规
      requestAnimationFrame 是空的，排进去的那一下根本不会跑，等于没测到拖动路径。 */
   api.beginInteract();
   check("按下后进入交互态", api.interacting === true);
+  /* 拖动中就要检查透明场是不是【实时】的：网格可以复用，场必须每帧重算并重传。
+     这正是用户报的那个 bug ——「拖动时规则失效，撒手才正常」。 */
+  const fieldStale = () => {
+    const gsp2 = api.mapL()/NS, nn2 = NS+1, last2 = S.strata.length-1;
+    let bad = 0;
+    for (let k=0;k<S.strata.length;k++) {
+      const m = api.meshStrata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
+      for (let v=0;v<m._pos.length/3; v++) {
+        if (k === last2 && (v < SZ || (v >= m._cutFrom && v < m._cutTo))) continue;
+        const a2 = Math.round(m._pos[3*v]/gsp2), b2 = Math.round(m._pos[3*v+1]/gsp2);
+        if (a2<0||a2>NS||b2<0||b2>NS) continue;
+        const q = b2*nn2 + a2;
+        const want = Math.min(api.COF[k*SZ + q] - m._pos[3*v+2], top.Z[q] - bot.Z[q]);
+        if ((m._s[v] < 0) !== (want < 0)) bad++;
+      }
+    }
+    return bad;
+  };
+  const beforeMesh = api.meshStrata.map(m => m);   // 记下拖动前的网格对象
+  let reused = 0, worstDuring = 0;
   for (let step=0; step<5; step++) {
     for (let q=0;q<I.z.length;q++) I.z[q] += 60;
     api.rebuild(false);                     // 这就是 rAF 里那一下（light 模式）
+    worstDuring = Math.max(worstDuring, fieldStale());
+    if (step === 0) {
+      reused = api.meshStrata.filter((m, k) => m && beforeMesh[k] === m).length;
+    }
     if (step === 0) {
       check("拖动中的这一帧确实走了 light 模式（交线与等高线先不算）",
             api.meshInter.length === 0 && api.meshContour.length === 0,
             `交线 ${api.meshInter.length} 组 / 等高线 ${api.meshContour.length} 组`);
     }
   }
+  check("拖动中确实发生了网格复用（否则这条测试是白过的）", reused > 0,
+        `${reused} / ${S.strata.length} 层直接沿用了上一帧的网格`);
+  check("【拖动过程中】透明场就是实时的（复用网格也要重算并重传场）",
+        worstDuring === 0, `${worstDuring} 个顶点在拖动中仍是旧判定`);
   api.endInteract();
   check("松手后退出交互态", api.interacting === false);
   check("松手后交线回来了", api.meshInter.length > 0, `${api.meshInter.length} 组`);
@@ -1810,5 +1842,6 @@ console.log("\n─── Ic. 拖动期间的重建（性能优化不能破坏规
           stale === 0 && checked > 0, `${checked} 个顶点里 ${stale} 个仍是旧判定`);
   }
 }
+
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);
