@@ -174,6 +174,7 @@ globalThis.__api = {
   rebuild, render, zRange, camMVP, camEye, project, activeCtrl, pick, worldPerPixel,
   PRESETS, loadPreset, setAllFolded, buildContours, drawMap, setInfo,
   beginInteract, endInteract, scheduleRebuild, get interacting(){ return interacting; },
+  get COF(){ return COF; },
   exposedBandXYZ, bandColor,
   FS_SURF, snapshot, loadText, selSet, buildStratumList, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
@@ -1749,6 +1750,65 @@ console.log("\n─── Fd. 地层柱折叠 ───");
   check("列表重建后折叠状态仍然记得", foldedCount() === rows().length,
         `${foldedCount()} / ${rows().length}`);
   api.setAllFolded(false);
+}
+/* ============================================================ Ic */
+console.log("\n─── Ic. 拖动期间的重建（性能优化不能破坏规则）───");
+{
+  /* 性能优化引入了"拖动时只重建变了的、透明场延后"的策略，这条路径测试里以前
+     完全没走过，所以先把它钉死：拖一次、松手，规则与各层的场都必须恢复完好。 */
+  const [, I] = reset([(x,y)=>600, (x,y)=>1200, (x,y)=>100 + 0.35*x]);
+  S.active = 1;
+  const ruleBad = () => {
+    const ii = S.ifaces; let bad = 0;
+    for (let q=0;q<SZ;q++) for (let i=0;i<ii.length;i++) {
+      let want = false;
+      for (let j=i+1;j<ii.length;j++) if (ii[j].Z[q] < ii[i].Z[q]) { want = true; break; }
+      if ((ii[i].S[q] < 0) !== want) bad++;
+    }
+    return bad;
+  };
+  check("起始：交界面的场逐点满足定义", ruleBad() === 0);
+
+  /* 模拟一次拖动：按下 → 连续移动 → 松手。
+     ⚠ 这里必须直接调 rebuild()，不能用 scheduleRebuild()：沙箱里的
+     requestAnimationFrame 是空的，排进去的那一下根本不会跑，等于没测到拖动路径。 */
+  api.beginInteract();
+  check("按下后进入交互态", api.interacting === true);
+  for (let step=0; step<5; step++) {
+    for (let q=0;q<I.z.length;q++) I.z[q] += 60;
+    api.rebuild(false);                     // 这就是 rAF 里那一下（light 模式）
+    if (step === 0) {
+      check("拖动中的这一帧确实走了 light 模式（交线与等高线先不算）",
+            api.meshInter.length === 0 && api.meshContour.length === 0,
+            `交线 ${api.meshInter.length} 组 / 等高线 ${api.meshContour.length} 组`);
+    }
+  }
+  api.endInteract();
+  check("松手后退出交互态", api.interacting === false);
+  check("松手后交线回来了", api.meshInter.length > 0, `${api.meshInter.length} 组`);
+  check("松手后交界面的场重新算过、仍逐点等于定义", ruleBad() === 0, `${ruleBad()} 个点不符`);
+
+  /* 关键：松手后每个地层的场也必须刷新 —— 复用过的旧网格不能留下来 */
+  {
+    const gsp = api.mapL()/NS, nn = NS+1, lastK = S.strata.length-1;
+    let stale = 0, checked = 0;
+    for (let k=0;k<S.strata.length;k++) {
+      const m = api.meshStrata[k], bot = S.ifaces[k], top = S.ifaces[k+1];
+      for (let v=0;v<m._pos.length/3; v++) {
+        /* 地表那层的顶盖、以及"沿交线切开的那些多边形"，场恒为 1e9（永远画）—— 跳过 */
+        if (k === lastK && (v < SZ || (v >= m._cutFrom && v < m._cutTo))) continue;
+        const x = m._pos[3*v], y = m._pos[3*v+1], z = m._pos[3*v+2];
+        const a = Math.round(x/gsp), bq = Math.round(y/gsp);
+        if (a<0||a>NS||bq<0||bq>NS) continue;
+        const q = bq*nn + a;
+        const want = Math.min(api.COF[k*SZ + q] - z, top.Z[q] - bot.Z[q]);
+        checked++;
+        if ((m._s[v] < 0) !== (want < 0)) stale++;
+      }
+    }
+    check("松手后各地层的场也刷新了（没留下复用时的旧场）",
+          stale === 0 && checked > 0, `${checked} 个顶点里 ${stale} 个仍是旧判定`);
+  }
 }
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
 process.exit(fail ? 1 : 0);

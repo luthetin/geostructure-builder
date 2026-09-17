@@ -1715,9 +1715,11 @@ function rebuild(fit) {
      拖一个界面时其余二十几张的高程一个字没动，没必要重建（这是拖动跟手的关键）。 */
   for (const I of S.ifaces) if (ifaceChanged(I)) { evalIface(I); I._gen = (I._gen|0) + 1; }
   const genAll = S.ifaces.reduce((a,I) => a + (I._gen|0), 0);
-  /* 拖动期间先不重算透明场（它要 O(n·SZ)，是这时最大的一块）：界面与地层的形状照旧实时更新，
-     只有"哪里该透明"会滞后一两帧，松手时一次完整重建就恢复 —— 手感优先。 */
-  if (!light) { computeIfaceFields(); computeStratumFields(); }
+  /* ⚠ 透明场【必须每帧都算】，哪怕在拖动中：这个程序的规则就是"拖过另一个界面要立刻变透明"，
+     省掉它等于规则失效（真机上就是这么表现的）。它要 O(n·SZ)，是拖动帧里最大的一块，
+     但正确性优先 —— 宁可慢一点，也不能让规则看着不动。 */
+  computeIfaceFields();
+  computeStratumFields();
   /* 上/下界面的代号都没变、而且不是地表那层（地表顶面还要按交线切开，依赖全部界面），
      就直接复用上一帧的网格 —— 位置、法线、颜色、索引、显存里的缓冲全都不用动。 */
   meshStrata = S.strata.map((st, k) => {
@@ -1921,8 +1923,7 @@ window.addEventListener('keyup', e => {
 window.addEventListener('blur', () => { spaceDown = false; cv.style.cursor = 'crosshair'; });
 cv.addEventListener('wheel', e => {
   e.preventDefault();
-  beginInteract();
-  clearTimeout(cv._wheelT); cv._wheelT = setTimeout(endInteract, 160);
+  /* 滚轮只改相机，不动几何 —— 不参与交互态，免得它的定时器把拖动中的状态清掉 */
   camDist=Math.max(mapL()*0.4, Math.min(mapL()*4, camDist*Math.exp(e.deltaY*0.0011)));
   updateSensNote();
   render();
@@ -2700,6 +2701,10 @@ setInfo();
 render();
 
 function loop() {
+  /* 【兜底】如果鼠标在窗口外松开、或者事件丢了，interacting 会一直是 true，
+     那样交线/等高线/平面图就永远不回来了（表现为"规则/交线失效"）。
+     只要当前没有任何拖动或触摸手势，就把它清掉并补一次完整重建。 */
+  if (interacting && !mode && tMode === null) endInteract();
   if (S.autoRotate) { camAz=(camAz+0.25)%360; render(); }
   requestAnimationFrame(loop);
 }
