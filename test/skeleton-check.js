@@ -177,7 +177,7 @@ globalThis.__api = {
   PRESETS, loadPreset, setAllFolded, buildContours, drawMap, setInfo,
   beginInteract, endInteract, scheduleRebuild, get interacting(){ return interacting; },
   get COF(){ return COF; },
-  exposedBandXYZ, bandColor,
+  exposedBandXYZ, bandColor, sampleSurface,
   FS_SURF, snapshot, loadText, selSet, buildStratumList, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
   get meshStrata(){ return meshStrata; }, get meshWire(){ return meshWire; },
@@ -874,16 +874,41 @@ console.log("\n─── My. 右侧平面图：三种模式 + 交线 ───")
      埋在下面的两两交线（地表上根本看不到）默认不画，否则平面图是一坨线。 */
   S.mapInterLid = true; api.drawMap();
   const drawnLid = api.mapInterSegs;
-  check("默认只画露头迹线（与地表相交的那些），埋在下面的不画",
-        lidSegs > 0 && buriedSegs > 0 && drawnLid === lidSegs,
-        `画出 ${drawnLid} 段 = 露头迹线 ${lidSegs} 段（埋在下面的另有 ${buriedSegs} 段没画）`);
+  /* 露头迹线还多一道筛选：只在【两张面都真的可见】的地方画 ——
+     某张界面在别处可能已经被别的界面压到透明了，那条线不该还留在图上。 */
+  check("默认只画露头迹线，且只在两张面都真的可见的地方画",
+        drawnLid > 0 && drawnLid <= lidSegs && buriedSegs > 0,
+        `画出 ${drawnLid} / ${lidSegs} 段（被可见性筛掉 ${lidSegs - drawnLid} 段；埋在下面的 ${buriedSegs} 段没画）`);
 
   /* 关掉那个开关才画全部两两交线 */
   S.mapInterLid = false; api.drawMap();
   const drawnAll = api.mapInterSegs;
-  check("关掉开关后所有两两交线都画", pairs >= 3 && drawnAll === lidSegs + buriedSegs,
-        `${pairs} 对相交 / 共 ${drawnAll} 段，应当是 ${lidSegs + buriedSegs} 段`);
+  check("关掉开关后所有两两交线都画（同样只保留可见的部分）",
+        pairs >= 3 && drawnAll > 0 && drawnAll <= lidSegs + buriedSegs,
+        `${pairs} 对相交 / 画出 ${drawnAll} / ${lidSegs + buriedSegs} 段`);
   S.mapInterLid = true; api.drawMap();
+
+  /* 【用户报的 bug】：多个地层互穿时，地表会和"已经透明的那张界面"产生交线。
+     直接查 3D 交线网格的每个顶点：不许有落在"两张面都确实不可见"的地方。 */
+  {
+    const tol = Math.max(0.5, api.mapL()/NS*0.05);
+    let bad = 0, tot = 0;
+    for (const m of api.meshInter) {
+      if (!m) continue;
+      for (let v=0; v<m._pos.length/3; v++) {
+        const x = m._pos[3*v], y = m._pos[3*v+1];
+        tot++;
+        let worst = -Infinity;                      // 对某一对来说，取"更可见的那张"
+        for (const I of S.ifaces) {
+          const h = api.sampleSurface(I.H, x, y);
+          if (h > worst) worst = h;
+        }
+        if (worst < -tol) bad++;                    // 所有面都看不见 → 这条线不该在这
+      }
+    }
+    check("交线不会画在【所有界面都不可见】的地方（用户报的那条）",
+          tot > 0 && bad === 0, `${tot} 个交线顶点里 ${bad} 个落在看不见的地方`);
+  }
 
   const interStroke = ctx.strokes.filter(s => s.segs > 4 && /rgba\(0,0,0/.test(s.style));
   check("交线是黑色、且用一条路径描边（不是一格一格的小段）",

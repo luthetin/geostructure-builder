@@ -757,12 +757,20 @@ function computeOrderFields() {
   const soften = Math.max(1, mapL()/NS);
   if (!COF || COF.length !== ns*SZ) COF = new Float32Array(Math.max(1, ns*SZ));
   const zs = S.ifaces.map(I => I.Z);
+  /* 同时算一张【硬场】H_i = min over j>i of (z_j − z_i)：不受软化影响，交线正好落在 H=0 上。
+     交线的取舍要用它 —— 用软化过的场判"这张面是不是真的透明了"，边界会被整条误杀。
+     运行最小值跟后缀和同一个循环，等于白送。 */
+  for (const I of S.ifaces) {
+    if (!I.H || I.H.length !== SZ) I.H = new Float32Array(SZ);
+  }
   for (let q=0;q<SZ;q++) {
     let zmin = Infinity;
     for (let j=0;j<n;j++) { const z = zs[j][q]; if (z < zmin) zmin = z; }
     let run = 0;                                  // run = Σ_{j>i} t_j
+    let runMin = Infinity;                        // 上面那些界面的【硬】最小高程
     for (let i=n-1;i>=0;i--) {
       const si = S.ifaces[i].S;
+      S.ifaces[i].H[q] = runMin === Infinity ? 1e9 : runMin - zs[i][q];
       /* 走到 i 时，run 还只有 j>i 的那些项 —— 正好是 S_i 与 C_i 都要的后缀和 */
       if (S.orderRule) {
         /* S_i 是【高度差】：上面那些界面的软最小高度，减去本界面的高度 */
@@ -772,6 +780,7 @@ function computeOrderFields() {
       if (i < ns) COF[i*SZ + q] = run > 0 ? zmin - soften*Math.log(run) : zs[i][q];
       const t = Math.exp(-(zs[i][q] - zmin)/soften);
       run += t;
+      if (zs[i][q] < runMin) runMin = zs[i][q];
     }
   }
   return COF;
@@ -1333,7 +1342,16 @@ function buildIntersections() {
     /* 表露面上带与带的分界，颜色边界是【把跨带格子沿交线切开】得到的
        （见 buildStratum 里 cutCells 那段），精确落在交线上，
        所以这里不需要加宽去盖位置偏差，仍然是细线。 */
-    emitRibbon(polys, A.NX, A.NY, A.NZ, HW, A.Z, B.Z, null, pos, nrm, col);
+    /* 【交线只画在两张面都真的可见的地方】
+       某张界面可能因为规则在别处已经透明了（多个地层互穿时很常见），
+       那条交线却还留在那里 —— 看起来就是"和已经透明的地层生成了交线"。
+       判据用【硬场】H：它不受软化影响，交线正好落在 H=0 上，
+       所以线不会在交点上被自己切断，只在"确实被压到看不见"的那一段消失。 */
+    /* 容差取几米：交线本身就落在 H=0 上，一点容差都不留会被浮点抖动切成一节一节；
+       只有"确实被别的界面压下去"的那一段才丢。 */
+    const tolH = Math.max(0.5, mapL()/NS*0.05);
+    const gap = (x, y) => sampleSurface(A.H, x, y) < -tolH || sampleSurface(B.H, x, y) < -tolH;
+    emitRibbon(polys, A.NX, A.NY, A.NZ, HW, A.Z, B.Z, gap, pos, nrm, col);
     if (pos.length) out.push(mesh(pos,nrm,col,null));
   }
   return out;
@@ -1614,6 +1632,7 @@ function drawMap() {
   mapInterSegs = 0;
   if (S.mapInter) {
     const vis = S.ifaces, lid = vis.length - 1;
+    const tolH = Math.max(0.5, mapL()/NS*0.05);    // 交线可见性容差，见 buildIntersections
     const sc = W / mapL();
     const F = new Float32Array(SZ);
     mctx.strokeStyle = rgbaOf(S.interColor, Math.max(0.25, S.interAlpha));
@@ -1624,10 +1643,14 @@ function drawMap() {
       for (let q=0;q<SZ;q++) F[q] = vis[i].Z[q] - vis[j].Z[q];
       for (const P0 of stitchContours(F)) {
         const P = smoothPoly(P0, 2);
-        mctx.moveTo(P[0][0]*sc, H - P[0][1]*sc);
-        for (let k=1;k<P.length;k++) {
-          mctx.lineTo(P[k][0]*sc, H - P[k][1]*sc);
-          mapInterSegs++;
+        let pen = false;
+        for (let k=0;k<P.length;k++) {
+          /* 同样只在两张面都真的可见的地方画（判据与 3D 那条一致，容差也一样） */
+          const ok = sampleSurface(vis[i].H, P[k][0], P[k][1]) > -tolH &&
+                     sampleSurface(vis[j].H, P[k][0], P[k][1]) > -tolH;
+          if (!ok) { pen = false; continue; }
+          if (!pen) { mctx.moveTo(P[k][0]*sc, H - P[k][1]*sc); pen = true; }
+          else { mctx.lineTo(P[k][0]*sc, H - P[k][1]*sc); mapInterSegs++; }
         }
       }
     }
