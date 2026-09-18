@@ -166,6 +166,10 @@ winEl.devicePixelRatio = 1;
 const sandbox = { document: doc, window: winEl, requestAnimationFrame: ()=>{}, console, Event: Ev,
   /* 真浏览器里有定时器（面板折叠后的"再量一次画布尺寸"用到），沙箱也得给 */
   setTimeout: (f)=>{ if (typeof f === "function") f(); return 0; }, clearTimeout: ()=>{} };
+/* vm 的 globalThis 默认指向 vm 内部的全局对象，不是这个 sandbox 对象。
+   于是脚本里写的 globalThis.__xxx = … 在沙箱外面读不到 —— 别名一下，
+   测试才能用"在脚本里打标记"这么干（Bd 段就用它给切开块标来源格）。 */
+sandbox.globalThis = sandbox;
 const epilogue = `
 globalThis.__api = {
   S, SPACING, NS, SZ, MAT_CR, MAT_BS, evalSurf, mapL, mat,
@@ -193,8 +197,32 @@ globalThis.__api = {
   get mapFill(){ return mapImg; },
 };
 `;
+/* 【给切开的多边形打上"它在哪一格"的标记】
+   只改内存里的脚本文本，不动 index.html。
+   为什么需要它：切开块的顶点里有一部分正好落在格线上，
+   "顶点属于哪一格"在浮点上是有歧义的（floor(x/gs) 可能差 1 ULP），
+   靠坐标反推会误判成"跑到邻格"。用生成它的那一格作准，判据就干净了。 */
+const taggedSrc = scriptSrc.replace(
+  "          idx.push(at, at+1, at+2);                   // 绕序与顶面一致（从上看逆时针）\n" +
+  "        }\n" +
+  "      }\n" +
+  "    }\n" +
+  "  }\n" +
+  "  const mmesh = mesh(pos,nrm,col,idx, sA);",
+  "          idx.push(at, at+1, at+2);\n" +
+  "          (globalThis.__cellOf||(globalThis.__cellOf={}))[(idx.length - cutFrom)/3 - 1]=a*1000+b;\n" +
+  "          for (let u=0;u<3;u++) (globalThis.__bandOf||(globalThis.__bandOf={}))[at+u]=bandN;\n" +
+  "        }\n" +
+  "      }\n" +
+  "    }\n" +
+  "  }\n" +
+  "  const mmesh = mesh(pos,nrm,col,idx, sA);");
+if (taggedSrc === scriptSrc) {
+  console.error("❌ 打标记的锚点没找到（index.html 里切开三角的 idx.push 变了）");
+  process.exit(1);
+}
 try {
-  vm.runInNewContext(scriptSrc + epilogue, sandbox, { filename: "index.html<script>" });
+  vm.runInNewContext(taggedSrc + epilogue, sandbox, { filename: "index.html<script>" });
 } catch (e) {
   console.error("❌ 脚本执行失败：", e.message);
   console.error(e.stack.split("\n").slice(0,6).join("\n"));
@@ -1962,6 +1990,137 @@ console.log("\n─── M2. 网格自洽（属性长度 / 索引范围）──
   api.endInteract();
   check("拖动复用一帧后，各网格属性仍然对齐（复用路径不放歪缓冲）",
         rr.bad.length === 0, rr.bad.length ? rr.bad.slice(0,4).join("；") : "干净");
+}
+
+/* ============================================================ Bd */
+/* 表露面的带边界：必须落在 app 自己认定的那条交线上
+   ------------------------------------------------------------
+   用户报的毛病："第二种不整合接触，较上方后沉积的岩层与地表相交之后，
+   表露面上的岩层条带全是马赛克锯齿"。
+   根因是【判带】与【切格】用了两套不等价的插值：
+     · 判带走 exposedBandXYZ → sampleSurface（按对角线劈开的双线性，
+       并且把采样点钳到 NS−1−1e-9）
+     · 切格却在四角之间做线性插值来求 (界面−地表)=0
+   实测两套在格边中点上平均差 11 m、最大 47.9 m（一格才 41.7 m），
+   贴最上/最右那一行更是差到 115 m（钳位语义不同）。
+   于是颜色边界整条偏离，并在每个格角折一下 —— 就是那片锯齿。
+   修好之后：切开处一律用 sampleSurface 求根，边界与判带逐点一致。
+
+   下面用手写的"不整合"模型（下方褶皱层被上方平缓层斜切，地表穿过多张界面）
+   把三件事钉住：格点上两套判据一致、切开块逐格铺满、切开块整块同色。 */
+console.log("\n─── Bd. 表露面带边界（不整合）───");
+{
+  /* 手写一个不整合：下方 4 条界面上下起伏，上方 2 条平缓斜切，
+     地表再斜一层 —— 地表要穿过好几张界面，才会出现跨带格 */
+  const IF = [
+    (x,y) => 600  + 220*Math.sin(x/1500) + 120*Math.cos(y/1700),
+    (x,y) => 900  + 260*Math.sin((x+300)/1400) + 90*Math.cos((y+200)/1500),
+    (x,y) => 1200 + 300*Math.sin((x+600)/1300) + 140*Math.cos((y+400)/1600),
+    (x,y) => 1500 + 240*Math.sin((x+900)/1600) + 110*Math.cos((y+700)/1400),
+    (x,y) => 1750 + 0.10*x + 0.04*y,          // 不整合面（上覆层的底）
+    (x,y) => 2200 + 0.12*x + 0.05*y,
+    (x,y) => 1200 + 0.55*x + 0.22*y,          // 地表：陡斜，穿过好几张界面
+  ];
+  /* 标记要在 reset（会 rebuild 一次）之前清空：不清的话旧标记会与新的撞上 */
+  sandbox.__cellOf = {}; sandbox.__bandOf = {};
+  reset(IF);
+  { /* 先确认这个手写模型真的会产生跨带格，否则下面全是空跑 */
+    const n0 = NS+1, L0 = api.mapL(), bd = new Map();
+    for (let b=0;b<n0;b++) for (let a=0;a<n0;a++) {
+      const v = api.exposedBandXYZ(L0*a/NS, L0*b/NS); bd.set(v,(bd.get(v)||0)+1);
+    }
+    let cross0 = 0;
+    for (let b=0;b<NS;b++) for (let a=0;a<NS;a++) {
+      const p0=b*n0+a, p1=p0+1, p2=p0+n0, p3=p2+1;
+      const v = [p0,p1,p3,p2].map(q => api.exposedBandXYZ(L0*(q%n0)/NS, L0*((q/n0)|0)/NS));
+      if (!(v[0]===v[1] && v[0]===v[2] && v[0]===v[3])) cross0++;
+    }
+    console.log(`      （手写模型：格点带号 ${[...bd.entries()].sort((p,q)=>p[0]-q[0]).map(([k,v])=>k+':'+v).join(' ')}，跨带格 ${cross0}）`);
+  }
+  const lid = api.meshStrata[S.strata.length-1];
+  const n = NS+1, Lm = api.mapL(), gs = Lm/NS, cellArea = gs*gs;
+
+  /* ① 格点上：sampleSurface 必须精确等于格点值。
+        否则"逐格点判带"与"按 sampleSurface 判带"就会公开矛盾。 */
+  {
+    let bad = 0, worst = 0;
+    for (let b=0;b<n;b++) for (let a=0;a<n;a++) {
+      const q = b*n+a;
+      for (const I of S.ifaces) {
+        const d = Math.abs(api.sampleSurface(I.Z, a*gs, b*gs) - I.Z[q]);
+        if (d > 1e-4) bad++;
+        if (d > worst) worst = d;
+      }
+    }
+    check("格点上 sampleSurface 精确等于格点高程（两套判带的前提）",
+          bad === 0, bad ? `${bad} 处不符，最大差 ${worst.toFixed(2)} m` : `${n*n*S.ifaces.length} 个比较全等`);
+  }
+
+  /* ② 切开块逐格铺满：每格的切开三角形面积之和 = 一格面积，
+        而且每个切开三角形的包围盒不许跨过格线。
+        归类不靠"顶点坐标反推格号"（顶点正好落在格线上时，floor(x/gs)
+        会差 1 ULP，那是歧义不是越界），改用【重心】定格 ——
+        重心一定在格内，离四边都有余量，判据稳定。 */
+  {
+    const byCell = new Map();
+    let spill = 0, worstDev = 0;
+    for (let t=lid._cutFrom; t<lid._cutTo; t+=3) {
+      const P=[0,1,2].map(j=>[lid._pos[3*(t+j)], lid._pos[3*(t+j)+1]]);
+      const x1=(P[0][0]+P[1][0]+P[2][0])/3, y1=(P[0][1]+P[1][1]+P[2][1])/3;
+      const ca=Math.floor(x1/gs), cb=Math.floor(y1/gs);
+      const x0=ca*gs, y0=cb*gs;
+      const ar = Math.abs((P[1][0]-P[0][0])*(P[2][1]-P[0][1]) - (P[2][0]-P[0][0])*(P[1][1]-P[0][1]))/2;
+      /* 容差 1 mm：顶点落在格线上时浮点会有最后一比特的溢出，
+         实测最大 0.00008 m —— 一格 41.7 m，与"叠在一起"是两回事 */
+      let dev = 0;
+      for (const q of P) dev = Math.max(dev, x0-q[0], q[0]-(x0+gs), y0-q[1], q[1]-(y0+gs));
+      if (dev > worstDev) worstDev = dev;
+      const code = ca*1000+cb;
+      const o = byCell.get(code) || { ar:0, out:0 };
+      o.ar += ar; if (dev > 0.001) o.out++;
+      byCell.set(code, o);
+      spill += (dev > 0.001 ? 1 : 0);
+    }
+    let worstCell = 0, badCells = 0;
+    for (const [,o] of byCell) {
+      const d = Math.abs(o.ar - cellArea);
+      if (d > cellArea*0.02) { badCells++; if (d > worstCell) worstCell = d; }
+    }
+    check("切开块全都留在自己那一格里（跑到邻格就会互相叠成碎块）",
+          spill === 0,
+          spill ? `${spill} 个三角形越出格线，最远 ${worstDev.toFixed(3)} m`
+                : `${byCell.size} 格全部自洽，最大溢出 ${worstDev.toFixed(6)} m`);
+    check("每格的切开块正好铺满一格（面积 = 一格）",
+          badCells === 0 && byCell.size > 0,
+          badCells ? `${badCells} 格面积不符，最大差 ${worstCell.toFixed(1)} m²`
+                   : `${byCell.size} 格，每格面积误差 < 2%`);
+  }
+
+  /* ③ 切开块整块同色：一个三角形里的顶点颜色必须一致
+        （顶点不共享 + 逐块给色 ⇒ 颜色边界就是那条切线） */
+  {
+    let mixed = 0;
+    for (let t=lid._cutFrom; t<lid._cutTo; t+=3) {
+      const c = k2 => Math.round(lid._col[4*(lid._idx[t+k2])]*255)+','+
+                      Math.round(lid._col[4*(lid._idx[t+k2])+1]*255)+','+
+                      Math.round(lid._col[4*(lid._idx[t+k2])+2]*255);
+      if (!(c(0)===c(1) && c(1)===c(2))) mixed++;
+    }
+    check("切开块整块同色（没有逐顶点插值的糊边）",
+          mixed === 0, mixed ? `${mixed} 个三角形顶点颜色不一致` : "全部整块同色");
+  }
+
+  /* ④ 切开区确实覆盖了多个带：否则上面几条都是空跑。
+        用"切开块自己的带号"数（不靠颜色 —— 不同地层可能撞色，
+        预设3 里就有三组同色，按颜色反推会数错）。 */
+  {
+    const bands = new Set();
+    const bt = sandbox.__bandOf || {};
+    for (let v=lid._cutFrom; v<lid._cutTo; v++) if (bt[v] !== undefined) bands.add(bt[v]);
+    check("切开区里真的出现了多个带（不是空跑）",
+          bands.size >= 2,
+          `切开区带号 ${[...bands].sort((x,y)=>x-y).join(',')}（${bands.size} 种），切开三角形 ${(lid._cutTo-lid._cutFrom)/3} 个`);
+  }
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
