@@ -181,7 +181,8 @@ globalThis.__api = {
   FS_SURF, snapshot, loadText, selSet, buildStratumList, fileBaseName,
   get contours(){ return contourInfo; }, get anchors(){ return contourAnchors; },
   get meshStrata(){ return meshStrata; }, get meshWire(){ return meshWire; },
-  get meshBase(){ return meshBase; },
+  get meshBase(){ return meshBase; }, get meshFill(){ return meshFill; },
+  get meshSel(){ return meshSel; },
   get meshIfaces(){ return meshIfaces; },
   get meshHandles(){ return meshHandles; }, get meshInter(){ return meshInter; },
   get meshContour(){ return meshContour; }, get mapState(){ return mapState; },
@@ -1893,6 +1894,74 @@ console.log("\n─── Fp. 左右面板折叠（宽屏）───");
   check("右侧也恢复", S.noRight === false && !doc.body.classList.contains('noRight'));
   check("折叠状态不进存档（只是界面偏好）",
         !('noLeft' in (api.snapshot() || {})) && !('noRight' in (api.snapshot() || {})));
+}
+
+/* ============================================================ M2 */
+/* 网格自洽：属性数组的长度必须与顶点数一致，索引必须落在顶点范围内。
+   ------------------------------------------------------------
+   这不是"风格检查"——【长度错的属性缓冲会被端序读歪】，真机上的表现就是
+   交界面/表露面上一片一片的杂色斑块（马赛克）。
+   真的踩过两次：
+     · 曾把逐顶点的"带号数组"写成 SZ 长度（9409），而网格有 21122 个顶点 ——
+       越界读到的数全被当成带号 → 整片花斑；
+     · 切开的跨带格会把顶点数顶到几万，一旦超过 65535，Uint16 索引就会绕回去。
+   假 GL 只把缓冲当黑盒，这两类错都测不出来，所以在这里按长度硬查。 */
+console.log("\n─── M2. 网格自洽（属性长度 / 索引范围）───");
+{
+  const listMeshes = () => {
+    const all = [];
+    api.meshStrata.forEach((m,k)=>{ if (m) all.push(['地层'+(k+1), m]); });
+    api.meshIfaces.forEach((m,k)=>{ if (m) all.push(['交界面'+(k+1), m]); });
+    for (const nm of ['meshBase','meshWire','meshFill','meshSel']) {
+      const v = api[nm]; if (v) all.push([nm, v]);
+    }
+    return all;
+  };
+  const scan = () => {
+    const bad = [];
+    let maxVerts = 0;
+    for (const [nm,m] of listMeshes()) {
+      const nv = m._pos.length/3;
+      if (nv > maxVerts) maxVerts = nv;
+      if (m._col.length !== nv*4) bad.push(`${nm} 颜色 ${m._col.length}≠${nv*4}`);
+      if (m._nrm.length !== nv*3) bad.push(`${nm} 法线 ${m._nrm.length}≠${nv*3}`);
+      /* 【重点】这两个是逐顶点场：长度错了就是越界读 → 花斑 */
+      if (m._s && m._s.length !== nv) bad.push(`${nm} 场 _s ${m._s.length}≠${nv}（越界读 = 花斑）`);
+      if (m._q && m._q.length !== nv) bad.push(`${nm} 格点号 _q ${m._q.length}≠${nv}（越界读 = 花斑）`);
+      if (m._idx && m._idx.length) {
+        let mx = 0; for (const v of m._idx) if (v > mx) mx = v;
+        if (mx >= nv) bad.push(`${nm} 索引 ${mx}≥顶点 ${nv}`);
+      }
+      if (nv > 65535) bad.push(`${nm} 顶点 ${nv}>65535，Uint16 索引会绕回`);
+    }
+    return { bad, maxVerts, count: listMeshes().length };
+  };
+
+  const orig = api.snapshot ? null : null; void orig;
+  let scanAll = { bad: [], maxVerts: 0, count: 0 };
+  for (const nm of ['预设1','预设2']) {
+    api.loadPreset(nm === '预设1' ? 0 : 1);
+    const r = scan();
+    scanAll.bad.push(...r.bad.map(s=>`[${nm}] `+s));
+    scanAll.count += r.count;
+    if (r.maxVerts > scanAll.maxVerts) scanAll.maxVerts = r.maxVerts;
+  }
+  check("两个预设的所有网格：属性长度与顶点数一致、索引不越界",
+        scanAll.bad.length === 0,
+        scanAll.bad.length ? scanAll.bad.slice(0,4).join("；") : `${scanAll.count} 个网格干净`);
+  check("顶点数不超过 Uint16 上限（切开的跨带格最容易顶破）",
+        scanAll.maxVerts <= 65535, `最多 ${scanAll.maxVerts} 个顶点`);
+
+  /* 拖动时走的是"复用网格 + 只重传场"那条路，属性最容易在这里错位 —— 单独验一遍 */
+  reset([ (x,y)=>800, (x,y)=>900 + 0.02*x, (x,y)=>1100 - 0.03*y, (x,y)=>1400 + 0.02*x ]);
+  const I = S.ifaces[S.active];
+  api.beginInteract();
+  I.z[0] += 40;
+  api.rebuild(false);
+  const rr = scan();
+  api.endInteract();
+  check("拖动复用一帧后，各网格属性仍然对齐（复用路径不放歪缓冲）",
+        rr.bad.length === 0, rr.bad.length ? rr.bad.slice(0,4).join("；") : "干净");
 }
 
 console.log(`\n═══ 结果：${pass} 通过 / ${fail} 失败 ═══`);
