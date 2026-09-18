@@ -1741,10 +1741,22 @@ console.log("\n─── Pz. 内置预设模型 ───");
   check("预设1 仍是 19 个交界面 / 18 个地层",
         d0.ifaces.length === 19 && d0.strata.length === 18,
         `${d0.ifaces.length} 交界面 / ${d0.strata.length} 地层，name="${d0.name}"`);
+  check("三个内置预设都在（预设1/2/3）",
+        api.presets.length === 3 &&
+        api.presets[0].name === '预设1' && api.presets[1].name === '预设2' && api.presets[2].name === '预设3',
+        api.presets.map(p=>p.name).join(", "));
+  {
+    /* 预设3 是那个"不整合"的模型：上覆序列斜切下伏褶皱层 —— 表露面带边界
+       那条 bug 就是它暴露出来的，所以形状要钉住：28 交界面 / 27 地层。 */
+    const d3 = JSON.parse(api.presets[2].json);
+    check("预设3 是 28 个交界面 / 27 个地层的不整合模型",
+          d3.ifaces.length === 28 && d3.strata.length === 27 && d3.name === '预设3',
+          `${d3.ifaces.length} 交界面 / ${d3.strata.length} 地层，name="${d3.name}"`);
+  }
 
   const sel = doc.getElementById('cPreset');
   check("下拉里有占位项和预设项", /选择预设/.test(sel.innerHTML) && /预设1/.test(sel.innerHTML)
-        && /预设2/.test(sel.innerHTML),
+        && /预设2/.test(sel.innerHTML) && /预设3/.test(sel.innerHTML),
         sel.innerHTML.replace(/<[^>]+>/g, ' ').trim().slice(0, 60));
 
   /* 选中它 = 真的载入 */
@@ -1967,14 +1979,14 @@ console.log("\n─── M2. 网格自洽（属性长度 / 索引范围）──
 
   const orig = api.snapshot ? null : null; void orig;
   let scanAll = { bad: [], maxVerts: 0, count: 0 };
-  for (const nm of ['预设1','预设2']) {
-    api.loadPreset(nm === '预设1' ? 0 : 1);
+  for (const [nm, i] of [['预设1',0],['预设2',1],['预设3',2]]) {
+    api.loadPreset(i);
     const r = scan();
     scanAll.bad.push(...r.bad.map(s=>`[${nm}] `+s));
     scanAll.count += r.count;
     if (r.maxVerts > scanAll.maxVerts) scanAll.maxVerts = r.maxVerts;
   }
-  check("两个预设的所有网格：属性长度与顶点数一致、索引不越界",
+  check("三个预设的所有网格：属性长度与顶点数一致、索引不越界",
         scanAll.bad.length === 0,
         scanAll.bad.length ? scanAll.bad.slice(0,4).join("；") : `${scanAll.count} 个网格干净`);
   check("顶点数不超过 Uint16 上限（切开的跨带格最容易顶破）",
